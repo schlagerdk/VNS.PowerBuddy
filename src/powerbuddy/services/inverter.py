@@ -271,8 +271,9 @@ class FroniusClient(InverterClient):
             max_charge_w = int(max(0.0, min(float(settings.max_charge_kw), float(settings.planned_charge_kw)) * 1000.0))
 
             # charge: lock SOC to 100%, hold: lock SOC to current value, discharge: automatic mode.
-            # Keep AC charging-from-other-sources enabled in discharge/auto mode.
-            ac_charge_enabled = is_charge or action == "discharge"
+            # Keep both source flags enabled in discharge/auto mode.
+            allow_external_charge_sources = is_charge or action == "discharge"
+            ac_charge_enabled = allow_external_charge_sources
             em_mode = 1 if is_charge else 0
             em_power = int(max(charge_power_w or 0.0, float(max_charge_w))) if is_charge else 0
 
@@ -309,7 +310,7 @@ class FroniusClient(InverterClient):
                 "/api/config/batteries",
                 {
                     "HYB_BM_CHARGEFROMAC": ac_charge_enabled,
-                    "HYB_EVU_CHARGEFROMGRID": is_charge,
+                    "HYB_EVU_CHARGEFROMGRID": allow_external_charge_sources,
                     "HYB_EM_MODE": em_mode,
                     "HYB_EM_POWER": em_power,
                     "BAT_M0_SOC_MODE": soc_mode,
