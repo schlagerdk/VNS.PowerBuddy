@@ -4,39 +4,42 @@
   <img src="assets/powerbuddy-icon.svg" alt="PowerBuddy icon" width="56" />
 </p>
 
-VNS.PowerBuddy er en Linux-klar backend service til smart energistyring:
+VNS.PowerBuddy is a backend service for smart battery and energy planning.
 
-- Henter spotpriser loebende.
-- Henter realtime data fra inverter (default: Fronius Gen24 API).
-- Laver en dagsplan for batteri (`charge` / `hold` / `discharge`).
-- Tager hoejde for forventet doegnforbrug i planlaegning/simulation.
-- Gemmer priser, snapshots, plan og simulation i SQLite.
-- Understotter manuelle overrides af planlagt adfaerd.
-- Fast dagsplan: ingen automatisk intraday replan medmindre du manuelt aendrer plan/action.
+Core capabilities:
 
-## Kompatibilitet
+- Continuously fetches spot prices.
+- Reads real-time inverter telemetry (default: Fronius Gen24 API).
+- Generates day plans for battery actions (`charge` / `hold` / `discharge`).
+- Uses expected daily consumption in planning and simulation.
+- Stores prices, power snapshots, plans, and simulations in SQLite.
+- Supports manual plan overrides through the API.
+- Keeps existing day plans stable unless changed manually.
 
-Denne version (v1.0.0) er lavet til Fronius-baserede installationer og benytter Fronius lokale API-endpoints til styring.
+## Compatibility
 
-Status lige nu:
-- Officielt understottet: Fronius inverter (Gen24/API-kompatibel opsaetning).
-- Testet i praksis: Fronius + BYD batteri.
-- Andre batterier bag Fronius kan muligvis virke, men er ikke verificeret endnu.
+This release (`v1.0.0`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
-Hvis du vil bruge loesningen i en anden kombination end Fronius + BYD, boer den valideres i testmiljoe foer produktion.
+Current status:
 
-## Arkitektur
+- Officially supported: Fronius inverter (Gen24/API-compatible setup).
+- Field-tested: Fronius + BYD battery.
+- Other battery systems behind Fronius may work but are not verified yet.
 
-- `src/powerbuddy/services/pricing.py`: Pris-provider interface + EnergiDataService implementation.
-- `src/powerbuddy/services/inverter.py`: Inverter interface + Fronius implementation.
-- `src/powerbuddy/services/planner.py`: Planlaegnings- og simulationsmotor.
-- `src/powerbuddy/repositories.py`: Data access lag.
-- `src/powerbuddy/main.py`: FastAPI endpoints.
-- `src/powerbuddy/services/scheduler.py`: Automatisk daglig drift.
+If you run a different hardware combination, validate in a test environment before production use.
 
-## Hurtig start (Linux)
+## Architecture
 
-1. Opret virtuelt miljoe og installer:
+- `src/powerbuddy/services/pricing.py`: Price provider interface and implementations (`energidataservice`, `elprisenligenu`).
+- `src/powerbuddy/services/inverter.py`: Inverter interface and Fronius implementation.
+- `src/powerbuddy/services/planner.py`: Planning and simulation engine.
+- `src/powerbuddy/repositories.py`: Data access layer.
+- `src/powerbuddy/main.py`: FastAPI application and endpoints.
+- `src/powerbuddy/services/scheduler.py`: Background jobs (price refresh, snapshots, execution).
+
+## Quick Start
+
+1. Create a virtual environment and install:
 
 ```bash
 python3 -m venv .venv
@@ -45,75 +48,83 @@ pip install -U pip
 pip install -e .
 ```
 
-2. Opret miljøfil:
+2. Create your local environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Din aktive config-fil er `/.env` i projektroden.
+The active runtime config file is `.env` in the project root.
 
-3. Start API:
+3. Start the API:
 
 ```bash
 uvicorn powerbuddy.main:app --host 0.0.0.0 --port 8000
 ```
 
-4. Test:
+4. Health check:
 
 ```bash
 curl http://localhost:8000/health
 ```
 
-5. Aabn Swagger dokumentation:
+5. Open API docs in your browser:
 
-```bash
-open http://localhost:8000/swagger
-```
+- `http://localhost:8000/swagger`
 
-## Build og release
+## Build And Release
 
-Lokal build med Makefile:
+Local run with Makefile:
 
 ```bash
 make install
 make run
 ```
 
-Versionering:
-- `VERSION` er release-version.
-- `pyproject.toml`, `src/powerbuddy/__init__.py` og FastAPI app-version holdes synkroniseret.
+Build wheel:
+
+```bash
+make build
+```
+
+Versioning:
+
+- `VERSION` is the release version.
+- `pyproject.toml`, `src/powerbuddy/__init__.py`, and the FastAPI app version should stay aligned.
 
 CI:
-- GitHub Actions workflow findes i `.github/workflows/ci.yml`.
 
-## Deploy model (produktion)
+- GitHub Actions workflow: `.github/workflows/ci.yml`.
 
-Loesningen deployes som Python wheel til et virtuelt miljoe og koerer ikke fra en `src` mappe paa serveren.
+## Deployment Model (Production)
 
-Det betyder:
-- Runtime kode ligger i `.../.venv/lib/pythonX.Y/site-packages/powerbuddy/`.
-- Service starter via `uvicorn powerbuddy.main:app` fra venv.
-- Serveren behoever kun:
-  - `/.venv` (runtime + pakker)
-  - `/data` (sqlite/datafiler)
-  - `/.env` (konfiguration)
+The service is intended to run from an installed Python package in a virtual environment, not directly from the `src` tree on the server.
 
-Fordel: mindre footprint, hurtigere deploy, mindre risiko for at efterlade unodvendige filer.
+That means:
 
-## API oversigt
+- Runtime code lives in `.../.venv/lib/pythonX.Y/site-packages/powerbuddy/`.
+- Service starts via `uvicorn powerbuddy.main:app` from the venv.
+- Server only needs:
+  - `/.venv` (runtime + packages)
+  - `/data` (SQLite/data files)
+  - `/.env` (configuration)
+
+## API Overview
 
 Swagger/OpenAPI:
+
 - `GET /swagger`
 - `GET /openapi.json`
 - `GET /redoc`
 
-Udvalgte endpoints:
+Selected endpoints:
+
+- `GET /`
 - `GET /health`
 - `GET /config`
 - `POST /prices/fetch?target_date=YYYY-MM-DD`
 - `GET /prices?target_date=YYYY-MM-DD`
-- `GET /prices` (default: fra nuvaerende time og 24 timer frem)
+- `GET /prices` (default: current hour + 24 hours ahead)
 - `GET /tariff`
 - `PUT /tariff/config`
 - `PUT /tariff/manual-hours`
@@ -129,31 +140,29 @@ Udvalgte endpoints:
 - `GET /planning/now`
 - `GET /planning/chart-data?target_date=YYYY-MM-DD`
 
-## Runtime config
+## Runtime Configuration
 
-- `GET /config` viser de effektive runtime settings, som indlaeses fra `.env` ved opstart.
-- Runtime config opdateres ikke via database eller API.
-- Aendringer i `.env` kraever restart af servicen for at traede i kraft.
-- `.env` er lokal og skal ikke commit'es.
+- `GET /config` returns the effective runtime settings loaded from `.env` at startup.
+- Runtime config is not updated through database writes or API config persistence.
+- Changes in `.env` require a service restart to take effect.
+- `.env` is local and should not be committed.
 
-Pris-rytmer i scheduler:
-- Spotpris timecadence: aktiv pris gaelder i 1 time, service refresher loebende (`POWERBUDDY_PRICE_RECHECK_INTERVAL_MINUTES`, default 60 i .env.example).
-- Day-ahead publicering: kommende doegns timepriser forventes omkring kl. 13 lokal tid (`POWERBUDDY_DAY_AHEAD_PUBLISH_HOUR_LOCAL`, default 13).
-- Planhorisont: service planlaegger mindst 48 timer frem (`POWERBUDDY_PLANNING_HORIZON_HOURS`, default 48) når en dag mangler plan.
+Scheduler behavior:
 
-Planstrategi:
-- Der genereres kun automatisk plan for en dag, hvis planen mangler.
-- Eksisterende dagsplan overskrives ikke automatisk.
-- Afvigelser sker kun ved manuelle API-aendringer (`/planning/action/*`, `/planning`, `/planning/override`).
+- Price refresh cadence is controlled by `POWERBUDDY_PRICE_RECHECK_INTERVAL_MINUTES`.
+- Day-ahead fetch timing is controlled by `POWERBUDDY_DAY_AHEAD_PUBLISH_HOUR_LOCAL`.
+- Planning horizon is controlled by `POWERBUDDY_PLANNING_HORIZON_HOURS` (minimum effective horizon is 48 hours).
+- Automatic planning is only generated for days without an existing plan.
+- Existing plans are not auto-overwritten by the scheduler.
 
-## Forbrug: init + dynamisk model
+## Consumption Model
 
-- Init-vaerdi: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH` i `.env` (fx 60).
-- Dynamisk model: hvis `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, bruges et rullende gennemsnit af historiske dagsforbrug fra `power_snapshots`.
-- Lookback-vindue: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
-- Datakrav pr. dag: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
+- Base value: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH`.
+- Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.
+- Lookback window: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
+- Minimum sample requirement per day: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
 
-## Eksempel: manuel override
+## Example: Manual Override
 
 ```json
 {
@@ -162,14 +171,14 @@ Planstrategi:
   "end_time": "2026-04-14T17:00:00+02:00",
   "action": "hold",
   "target_soc": 65,
-  "reason": "bevar SOC i spidslast"
+  "reason": "preserve SOC during peak load"
 }
 ```
 
-## Næste roadmap
+## Roadmap
 
-- Bedre forecast for husforbrug og PV produktion.
-- Tariffer, afgifter og nettarif-vinduer.
-- Profitoptimering med eksportpris/importpris.
-- UI/dashboard med grafer og redigering af plan.
-- Flere adapters: Deye, Huawei, Tesla Powerwall m.fl.
+- Better household consumption and PV production forecasting.
+- Expanded tariff/fee handling.
+- Profit optimization based on export/import pricing.
+- UI/dashboard for charts and plan editing.
+- More inverter adapters (Deye, Huawei, Tesla Powerwall, others).
