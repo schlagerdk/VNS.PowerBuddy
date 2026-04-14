@@ -14,6 +14,17 @@ VNS.PowerBuddy er en Linux-klar backend service til smart energistyring:
 - Understotter manuelle overrides af planlagt adfaerd.
 - Fast dagsplan: ingen automatisk intraday replan medmindre du manuelt aendrer plan/action.
 
+## Kompatibilitet
+
+Denne version (v1.0.0) er lavet til Fronius-baserede installationer og benytter Fronius lokale API-endpoints til styring.
+
+Status lige nu:
+- Officielt understottet: Fronius inverter (Gen24/API-kompatibel opsaetning).
+- Testet i praksis: Fronius + BYD batteri.
+- Andre batterier bag Fronius kan muligvis virke, men er ikke verificeret endnu.
+
+Hvis du vil bruge loesningen i en anden kombination end Fronius + BYD, boer den valideres i testmiljoe foer produktion.
+
 ## Arkitektur
 
 - `src/powerbuddy/services/pricing.py`: Pris-provider interface + EnergiDataService implementation.
