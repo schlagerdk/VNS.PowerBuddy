@@ -87,6 +87,20 @@ Versionering:
 CI:
 - GitHub Actions workflow findes i `.github/workflows/ci.yml`.
 
+## Deploy model (produktion)
+
+Loesningen deployes som Python wheel til et virtuelt miljoe og koerer ikke fra en `src` mappe paa serveren.
+
+Det betyder:
+- Runtime kode ligger i `.../.venv/lib/pythonX.Y/site-packages/powerbuddy/`.
+- Service starter via `uvicorn powerbuddy.main:app` fra venv.
+- Serveren behoever kun:
+  - `/.venv` (runtime + pakker)
+  - `/data` (sqlite/datafiler)
+  - `/.env` (konfiguration)
+
+Fordel: mindre footprint, hurtigere deploy, mindre risiko for at efterlade unodvendige filer.
+
 ## API oversigt
 
 Swagger/OpenAPI:
