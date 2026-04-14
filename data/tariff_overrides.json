@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "network_owner": "Radius Elnet A/S",
+    "network_code": "DT_C_01",
+    "energinet_ore_flat": 7.5,
+    "elafgift_ore_flat": 76.1,
+    "vat_factor": 1.25
+  },
+  "manual_network_tariff_ore_per_hour": null
+}

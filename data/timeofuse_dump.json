@@ -1,0 +1,1067 @@
+{
+  "_timeofuse_meta": {
+    "entryBaseType": {
+      "TimeTable": {
+        "_End_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Start_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "Weekdays": {
+        "_Fri_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Mon_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sat_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sun_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Thu_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Tue_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Wed_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "_Active_meta": {
+        "displayType": "Switch",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Boolean",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Power_meta": {
+        "displayType": "Integer",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "validators": {
+          "powerlimit": {
+            "ranges": {
+              "default_range": {
+                "lowerBound": 0.0,
+                "upperBound": 2000000000.0
+              }
+            },
+            "type": "range"
+          }
+        },
+        "valueType": "Integer",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_ScheduleType_meta": {
+        "displayType": "ListSelect",
+        "options": {
+          "CHARGE_MAX": {
+            "value": "CHARGE_MAX"
+          },
+          "CHARGE_MIN": {
+            "value": "CHARGE_MIN"
+          },
+          "DISCHARGE_MAX": {
+            "value": "DISCHARGE_MAX"
+          },
+          "DISCHARGE_MIN": {
+            "value": "DISCHARGE_MIN"
+          }
+        },
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "String",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_TimeTable_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Weekdays_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      }
+    },
+    "readPermission": {
+      "RoleCustomer": true,
+      "RoleRemote": true,
+      "RoleTechnician": true
+    },
+    "uiExtension": {
+      "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+    },
+    "valueType": "Array",
+    "writePermission": {
+      "RoleCustomer": true,
+      "RoleTechnician": true
+    }
+  },
+  "timeofuse": [
+    {
+      "Active": false,
+      "Power": 6000,
+      "ScheduleType": "CHARGE_MIN",
+      "TimeTable": {
+        "End": "16:00",
+        "Start": "14:27",
+        "_End_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Start_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "Weekdays": {
+        "Fri": true,
+        "Mon": true,
+        "Sat": true,
+        "Sun": true,
+        "Thu": true,
+        "Tue": true,
+        "Wed": true,
+        "_Fri_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Mon_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sat_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sun_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Thu_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Tue_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Wed_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "_Active_meta": {
+        "displayType": "Switch",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Boolean",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Power_meta": {
+        "displayType": "Integer",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "validators": {
+          "powerlimit": {
+            "ranges": {
+              "default_range": {
+                "lowerBound": 0.0,
+                "upperBound": 2000000000.0
+              }
+            },
+            "type": "range"
+          }
+        },
+        "valueType": "Integer",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_ScheduleType_meta": {
+        "displayType": "ListSelect",
+        "options": {
+          "CHARGE_MAX": {
+            "value": "CHARGE_MAX"
+          },
+          "CHARGE_MIN": {
+            "value": "CHARGE_MIN"
+          },
+          "DISCHARGE_MAX": {
+            "value": "DISCHARGE_MAX"
+          },
+          "DISCHARGE_MIN": {
+            "value": "DISCHARGE_MIN"
+          }
+        },
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "String",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_TimeTable_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Weekdays_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      }
+    },
+    {
+      "Active": false,
+      "Power": 6000,
+      "ScheduleType": "CHARGE_MIN",
+      "TimeTable": {
+        "End": "14:00",
+        "Start": "10:00",
+        "_End_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Start_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "Weekdays": {
+        "Fri": true,
+        "Mon": true,
+        "Sat": false,
+        "Sun": false,
+        "Thu": true,
+        "Tue": true,
+        "Wed": true,
+        "_Fri_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Mon_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sat_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sun_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Thu_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Tue_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Wed_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "_Active_meta": {
+        "displayType": "Switch",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Boolean",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Power_meta": {
+        "displayType": "Integer",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "validators": {
+          "powerlimit": {
+            "ranges": {
+              "default_range": {
+                "lowerBound": 0.0,
+                "upperBound": 2000000000.0
+              }
+            },
+            "type": "range"
+          }
+        },
+        "valueType": "Integer",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_ScheduleType_meta": {
+        "displayType": "ListSelect",
+        "options": {
+          "CHARGE_MAX": {
+            "value": "CHARGE_MAX"
+          },
+          "CHARGE_MIN": {
+            "value": "CHARGE_MIN"
+          },
+          "DISCHARGE_MAX": {
+            "value": "DISCHARGE_MAX"
+          },
+          "DISCHARGE_MIN": {
+            "value": "DISCHARGE_MIN"
+          }
+        },
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "String",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_TimeTable_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Weekdays_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      }
+    },
+    {
+      "Active": false,
+      "Power": 6000,
+      "ScheduleType": "CHARGE_MIN",
+      "TimeTable": {
+        "End": "23:59",
+        "Start": "22:00",
+        "_End_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Start_meta": {
+          "displayType": "Text",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "String",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "Weekdays": {
+        "Fri": true,
+        "Mon": true,
+        "Sat": true,
+        "Sun": true,
+        "Thu": true,
+        "Tue": true,
+        "Wed": true,
+        "_Fri_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Mon_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sat_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Sun_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Thu_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Tue_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        },
+        "_Wed_meta": {
+          "displayType": "Switch",
+          "readPermission": {
+            "RoleCustomer": true,
+            "RoleRemote": true,
+            "RoleTechnician": true
+          },
+          "uiExtension": {
+            "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+          },
+          "valueType": "Boolean",
+          "writePermission": {
+            "RoleCustomer": true,
+            "RoleTechnician": true
+          }
+        }
+      },
+      "_Active_meta": {
+        "displayType": "Switch",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Boolean",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Power_meta": {
+        "displayType": "Integer",
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "validators": {
+          "powerlimit": {
+            "ranges": {
+              "default_range": {
+                "lowerBound": 0.0,
+                "upperBound": 2000000000.0
+              }
+            },
+            "type": "range"
+          }
+        },
+        "valueType": "Integer",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_ScheduleType_meta": {
+        "displayType": "ListSelect",
+        "options": {
+          "CHARGE_MAX": {
+            "value": "CHARGE_MAX"
+          },
+          "CHARGE_MIN": {
+            "value": "CHARGE_MIN"
+          },
+          "DISCHARGE_MAX": {
+            "value": "DISCHARGE_MAX"
+          },
+          "DISCHARGE_MIN": {
+            "value": "DISCHARGE_MIN"
+          }
+        },
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "String",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_TimeTable_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      },
+      "_Weekdays_meta": {
+        "readPermission": {
+          "RoleCustomer": true,
+          "RoleRemote": true,
+          "RoleTechnician": true
+        },
+        "uiExtension": {
+          "dictionaryPrefix": "CONFIG.TIMEOFUSE"
+        },
+        "valueType": "Object",
+        "writePermission": {
+          "RoleCustomer": true,
+          "RoleTechnician": true
+        }
+      }
+    }
+  ]
+}
