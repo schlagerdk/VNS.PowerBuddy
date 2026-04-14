@@ -40,7 +40,44 @@ class PowerBuddyScheduler:
             realtime = await self.inverter_client.get_realtime()
             return realtime.battery_soc
         except Exception:
-            return PowerRepository.get_latest_battery_soc() or 50.0
+            return PowerRepository.get_latest_battery_soc() or 85.0
+
+    async def _resolve_start_soc_for_day(self, day: date) -> float:
+        """Return the expected battery SOC at the start of 'day' (local midnight 00:00).
+
+        For today or past: returns live SOC.
+        For future days: simulates today's remaining plan from current SOC and returns
+        the projected end-of-day SOC so the plan starts with an accurate state.
+        """
+        today = date.today()
+        live_soc = await self._fetch_soc()
+
+        if day <= today:
+            return live_soc
+
+        today_actions = PlanRepository.get_plan(today.isoformat())
+        if not today_actions:
+            return live_soc
+
+        tz = ZoneInfo(settings.timezone)
+        now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        remaining_actions = [
+            a for a in today_actions
+            if (a.start_time.replace(tzinfo=None) if a.start_time.tzinfo else a.start_time) >= now_local_hour
+        ]
+        if not remaining_actions:
+            return live_soc
+
+        try:
+            weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(today)
+            simulation = self.planner.simulate(today, remaining_actions, start_soc=live_soc, pv_weather_factor_24h=weather_factors)
+            if simulation:
+                projected_soc = simulation[-1].projected_soc
+                return max(float(settings.battery_min_soc), min(100.0, projected_soc))
+        except Exception:
+            pass
+
+        return live_soc
 
     async def _plan_and_simulate(self, day: date, prices: list[PricePoint], soc: float, lock_hours: int = 0) -> None:
         tz = ZoneInfo(settings.timezone)
@@ -205,7 +242,7 @@ class PowerBuddyScheduler:
                 continue
 
             logger.info("No existing plan for %s — generating daily plan", day)
-            soc = await self._fetch_soc()
+            soc = await self._resolve_start_soc_for_day(day)
             await self._plan_and_simulate(day, prices, soc)
 
     async def snapshot_power(self) -> None:
@@ -265,7 +302,8 @@ class PowerBuddyScheduler:
             if not prices:
                 continue
 
-            await self._plan_and_simulate(day, prices, realtime.battery_soc)
+            soc_for_day = await self._resolve_start_soc_for_day(day)
+            await self._plan_and_simulate(day, prices, soc_for_day)
 
         self._last_solar_replan_at = now
         logger.info(

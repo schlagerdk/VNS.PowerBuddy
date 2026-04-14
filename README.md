@@ -6,19 +6,29 @@
 
 VNS.PowerBuddy is a backend service for smart battery and energy planning.
 
+
 Core capabilities:
 
 - Continuously fetches spot prices.
 - Reads real-time inverter telemetry (default: Fronius Gen24 API).
 - Generates day plans for battery actions (`charge` / `hold` / `discharge`).
-- Uses expected daily consumption in planning and simulation.
+- Weather-based PV production forecasting (Open-Meteo cloud/radiation API).
+- Seasonal consumption anchoring with configurable monthly reference values.
+- Weekday/weekend consumption profiling.
+- Multi-scenario robust planning (low/base/high PV and consumption scenarios).
+- Battery efficiency and cycle degradation cost modelling.
+- Solar capture hold mode — allows PV charging in hold without grid draw.
+- Intraday guarded re-planning when consumption deviates from expectations.
+- KPI tracking and automatic consumption tuning based on historical accuracy.
+- Accurate SOC projection for future-day planning (simulates today's remaining plan).
+- Reserve SOC protection windows (configurable hours, e.g. evening peak).
 - Stores prices, power snapshots, plans, and simulations in SQLite.
 - Supports manual plan overrides through the API.
 - Keeps existing day plans stable unless changed manually.
 
 ## Compatibility
 
-This release (`v1.0.0`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.1`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -161,6 +171,9 @@ Scheduler behavior:
 - Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.
 - Lookback window: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
 - Minimum sample requirement per day: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
+- Seasonal anchoring: when `POWERBUDDY_SEASONAL_ANCHOR_ENABLED=true`, the dynamic value is blended with a monthly reference (`POWERBUDDY_SEASONAL_ANCHOR_MONTHLY_DAILY_KWH_JSON`).
+- Weekday/weekend split: when enabled, separate consumption profiles are used for weekdays vs. weekends.
+- PV production: weather-scaled hourly PV profile fetched from Open-Meteo; net consumption (household minus PV) is used in the planner.
 
 ## Example: Manual Override
 
@@ -177,7 +190,6 @@ Scheduler behavior:
 
 ## Roadmap
 
-- Better household consumption and PV production forecasting.
 - Expanded tariff/fee handling.
 - Profit optimization based on export/import pricing.
 - UI/dashboard for charts and plan editing.

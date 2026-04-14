@@ -118,6 +118,44 @@ async def _resolve_current_soc() -> float:
     return snapshot_soc if snapshot_soc is not None else 85.0
 
 
+async def _resolve_start_soc_for_day(day: date) -> float:
+    """Return the expected battery SOC at the start of 'day' (local midnight 00:00).
+
+    - day == today or past: return live SOC directly (plan starts from current state).
+    - day > today: simulate today's remaining plan actions from current SOC and return
+      the projected end-of-day SOC so the plan for tomorrow starts with accurate state.
+    - Falls back to live SOC if today has no plan or simulation fails.
+    """
+    today = date.today()
+    live_soc = await _resolve_current_soc()
+
+    if day <= today:
+        return live_soc
+
+    # Future day — project through end of today to estimate SOC at midnight.
+    today_actions = PlanRepository.get_plan(today.isoformat())
+    if not today_actions:
+        return live_soc
+
+    tz = ZoneInfo(settings.timezone)
+    now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+    remaining_actions = [a for a in today_actions if _naive_ts(a.start_time) >= now_local_hour]
+    if not remaining_actions:
+        return live_soc
+
+    try:
+        planner = DayPlanner()
+        weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(today)
+        simulation = planner.simulate(today, remaining_actions, start_soc=live_soc, pv_weather_factor_24h=weather_factors)
+        if simulation:
+            projected_soc = simulation[-1].projected_soc
+            return max(float(settings.battery_min_soc), min(100.0, projected_soc))
+    except Exception:
+        pass
+
+    return live_soc
+
+
 async def _ensure_prices_with_fallback(requested_day: date) -> tuple[date, list, bool]:
     prices = PriceRepository.get_by_day(requested_day, settings.price_area)
     provider = get_price_provider()
@@ -318,7 +356,7 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
     planner = DayPlanner()
     day_key = used_day.isoformat()
     expected_daily_consumption_kwh, consumption_source = planner.resolve_expected_daily_consumption(used_day)
-    current_soc = await _resolve_current_soc()
+    current_soc = await _resolve_start_soc_for_day(used_day)
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(used_day)
     network_tariff = await tariff_service.get_network_tariff_24h()
 
@@ -524,7 +562,7 @@ async def generate_plan(target_date: date | None = None) -> dict[str, int]:
     if not prices:
         raise HTTPException(status_code=400, detail="No prices found for requested date")
 
-    current_soc = await _resolve_current_soc()
+    current_soc = await _resolve_start_soc_for_day(day)
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
     network_tariff = await tariff_service.get_network_tariff_24h()
     tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
