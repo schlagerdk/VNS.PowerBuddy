@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     max_charge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_CHARGE_KW")
     max_discharge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_DISCHARGE_KW")
     hold_charge_power_w: float = Field(default=5.0, alias="POWERBUDDY_HOLD_CHARGE_POWER_W")
+    hold_solar_capture_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_ENABLED",
+    )
+    hold_solar_capture_pv_w_threshold: float = Field(
+        default=2500.0,
+        alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_PV_W_THRESHOLD",
+    )
+    hold_solar_capture_export_w_threshold: float = Field(
+        default=-500.0,
+        alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_EXPORT_W_THRESHOLD",
+    )
 
     expected_daily_consumption_kwh: float = Field(
         default=60.0,
@@ -77,7 +89,58 @@ class Settings(BaseSettings):
         default=24,
         alias="POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY",
     )
+    consumption_profile_weekpart_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_CONSUMPTION_PROFILE_WEEKPART_ENABLED",
+    )
+    seasonal_anchor_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_SEASONAL_ANCHOR_ENABLED",
+    )
+    # JSON object keyed by month number (1-12) with daily kWh anchor values.
+    # Example: {"1": 75.0, "2": 64.0, "3": 41.0, "4": 28.0, ...}
+    seasonal_anchor_monthly_daily_kwh_json: str = Field(
+        default='{"1":75.2,"2":64.1,"3":41.3,"4":27.9,"5":30.0,"6":28.0,"7":27.0,"8":29.0,"9":32.0,"10":40.0,"11":55.0,"12":69.4}',
+        alias="POWERBUDDY_SEASONAL_ANCHOR_MONTHLY_DAILY_KWH_JSON",
+    )
+    seasonal_anchor_weight: float = Field(
+        default=0.35,
+        alias="POWERBUDDY_SEASONAL_ANCHOR_WEIGHT",
+    )
+    seasonal_anchor_max_deviation_ratio: float = Field(
+        default=0.45,
+        alias="POWERBUDDY_SEASONAL_ANCHOR_MAX_DEVIATION_RATIO",
+    )
     feed_in_tariff_ore: float = Field(default=25.0, alias="POWERBUDDY_FEED_IN_TARIFF_ORE")
+
+    # Robust scenario planning (multipliers on expected hourly consumption)
+    scenario_low_factor: float = Field(default=0.85, alias="POWERBUDDY_SCENARIO_LOW_FACTOR")
+    scenario_base_factor: float = Field(default=1.0, alias="POWERBUDDY_SCENARIO_BASE_FACTOR")
+    scenario_high_factor: float = Field(default=1.25, alias="POWERBUDDY_SCENARIO_HIGH_FACTOR")
+    scenario_high_penalty_weight: float = Field(default=0.35, alias="POWERBUDDY_SCENARIO_HIGH_PENALTY_WEIGHT")
+
+    # Reserve SOC window to protect expensive hours.
+    reserve_soc_enabled: bool = Field(default=True, alias="POWERBUDDY_RESERVE_SOC_ENABLED")
+    reserve_soc_start_hour_local: int = Field(default=17, alias="POWERBUDDY_RESERVE_SOC_START_HOUR_LOCAL")
+    reserve_soc_end_hour_local: int = Field(default=21, alias="POWERBUDDY_RESERVE_SOC_END_HOUR_LOCAL")
+    reserve_soc_min_percent: float = Field(default=45.0, alias="POWERBUDDY_RESERVE_SOC_MIN_PERCENT")
+
+    # Battery efficiency and wear cost.
+    charge_efficiency: float = Field(default=0.93, alias="POWERBUDDY_CHARGE_EFFICIENCY")
+    discharge_efficiency: float = Field(default=0.93, alias="POWERBUDDY_DISCHARGE_EFFICIENCY")
+    cycle_degradation_cost_ore_per_kwh: float = Field(
+        default=8.0,
+        alias="POWERBUDDY_CYCLE_DEGRADATION_COST_ORE_PER_KWH",
+    )
+    objective_include_vat: bool = Field(default=True, alias="POWERBUDDY_OBJECTIVE_INCLUDE_VAT")
+
+    # PV forecast from historical snapshots.
+    pv_forecast_enabled: bool = Field(default=True, alias="POWERBUDDY_PV_FORECAST_ENABLED")
+    pv_forecast_lookback_days: int = Field(default=14, alias="POWERBUDDY_PV_FORECAST_LOOKBACK_DAYS")
+    pv_forecast_min_samples_per_day: int = Field(default=24, alias="POWERBUDDY_PV_FORECAST_MIN_SAMPLES_PER_DAY")
+    weather_forecast_enabled: bool = Field(default=True, alias="POWERBUDDY_WEATHER_FORECAST_ENABLED")
+    weather_latitude: float = Field(default=55.6761, alias="POWERBUDDY_WEATHER_LATITUDE")
+    weather_longitude: float = Field(default=12.5683, alias="POWERBUDDY_WEATHER_LONGITUDE")
 
     # How often (minutes) to re-fetch prices and possibly re-plan
     price_recheck_interval_minutes: int = Field(
@@ -125,6 +188,18 @@ class Settings(BaseSettings):
         default=15,
         alias="POWERBUDDY_SOLAR_REPLAN_COOLDOWN_MINUTES",
     )
+
+    intraday_replan_enabled: bool = Field(default=True, alias="POWERBUDDY_INTRADAY_REPLAN_ENABLED")
+    intraday_replan_interval_minutes: int = Field(default=30, alias="POWERBUDDY_INTRADAY_REPLAN_INTERVAL_MINUTES")
+    intraday_replan_lock_hours: int = Field(default=2, alias="POWERBUDDY_INTRADAY_REPLAN_LOCK_HOURS")
+    intraday_replan_consumption_deviation_trigger_ratio: float = Field(
+        default=0.22,
+        alias="POWERBUDDY_INTRADAY_REPLAN_CONSUMPTION_DEVIATION_TRIGGER_RATIO",
+    )
+
+    kpi_tracking_enabled: bool = Field(default=True, alias="POWERBUDDY_KPI_TRACKING_ENABLED")
+    auto_tuning_enabled: bool = Field(default=True, alias="POWERBUDDY_AUTO_TUNING_ENABLED")
+    auto_tuning_step_max_ratio: float = Field(default=0.12, alias="POWERBUDDY_AUTO_TUNING_STEP_MAX_RATIO")
 
     # ── Tariff / fees ──────────────────────────────────────────────────────────
     # DSO network tariff fetched from Energi Data Service (DatahubPricelist).

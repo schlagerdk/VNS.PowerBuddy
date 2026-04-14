@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import delete, func, select
 
 from powerbuddy.database import SessionLocal
-from powerbuddy.models import PlanAction, PowerSnapshot, PricePoint, SimulationPoint
+from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot, PricePoint, SimulationPoint
 
 
 class PriceRepository:
@@ -140,6 +140,219 @@ class PowerRepository:
 
         return round(sum(values) / len(values), 3)
 
+    @staticmethod
+    def rolling_average_hourly_consumption_profile(
+        reference_day: date,
+        lookback_days: int,
+        min_samples_per_day: int,
+    ) -> list[float] | None:
+        """
+        Return a 24-value normalized load profile (sum = 1.0) built from historical
+        snapshots. Each day contributes a normalized per-hour shape to avoid letting
+        one high-consumption day dominate absolute magnitude.
+        """
+        day_profiles: list[list[float]] = []
+
+        for offset in range(1, max(lookback_days, 1) + 1):
+            day = reference_day - timedelta(days=offset)
+            day_start = datetime.combine(day, datetime.min.time())
+            day_end = day_start + timedelta(days=1)
+
+            with SessionLocal() as session:
+                snapshots = list(
+                    session.execute(
+                        select(PowerSnapshot)
+                        .where(
+                            PowerSnapshot.timestamp >= day_start,
+                            PowerSnapshot.timestamp < day_end,
+                        )
+                        .order_by(PowerSnapshot.timestamp.asc())
+                    ).scalars()
+                )
+
+            if len(snapshots) < min_samples_per_day:
+                continue
+
+            hourly_kwh = [0.0] * 24
+            total_kwh = 0.0
+            for idx, current in enumerate(snapshots):
+                if idx + 1 < len(snapshots):
+                    next_ts = snapshots[idx + 1].timestamp
+                    delta_hours = max(0.0, (next_ts - current.timestamp).total_seconds() / 3600.0)
+                else:
+                    delta_hours = 5.0 / 60.0
+
+                delta_hours = min(delta_hours, 0.25)
+                load_kwh = max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+                hour = int(current.timestamp.hour)
+                hourly_kwh[hour] += load_kwh
+                total_kwh += load_kwh
+
+            if total_kwh <= 0:
+                continue
+
+            day_profiles.append([value / total_kwh for value in hourly_kwh])
+
+        if not day_profiles:
+            return None
+
+        aggregated = [0.0] * 24
+        for profile in day_profiles:
+            for hour in range(24):
+                aggregated[hour] += profile[hour]
+
+        count = float(len(day_profiles))
+        averaged = [value / count for value in aggregated]
+        s = sum(averaged)
+        if s <= 0:
+            return None
+        return [value / s for value in averaged]
+
+    @staticmethod
+    def rolling_average_hourly_consumption_profile_weekpart(
+        reference_day: date,
+        lookback_days: int,
+        min_samples_per_day: int,
+    ) -> list[float] | None:
+        """
+        Return load profile filtered by day type (weekday/weekend) to capture
+        weekly behavior differences.
+        """
+        target_is_weekend = reference_day.weekday() >= 5
+        day_profiles: list[list[float]] = []
+
+        for offset in range(1, max(lookback_days, 1) + 1):
+            day = reference_day - timedelta(days=offset)
+            if (day.weekday() >= 5) != target_is_weekend:
+                continue
+
+            day_start = datetime.combine(day, datetime.min.time())
+            day_end = day_start + timedelta(days=1)
+            with SessionLocal() as session:
+                snapshots = list(
+                    session.execute(
+                        select(PowerSnapshot)
+                        .where(
+                            PowerSnapshot.timestamp >= day_start,
+                            PowerSnapshot.timestamp < day_end,
+                        )
+                        .order_by(PowerSnapshot.timestamp.asc())
+                    ).scalars()
+                )
+
+            if len(snapshots) < min_samples_per_day:
+                continue
+
+            hourly_kwh = [0.0] * 24
+            total_kwh = 0.0
+            for idx, current in enumerate(snapshots):
+                if idx + 1 < len(snapshots):
+                    next_ts = snapshots[idx + 1].timestamp
+                    delta_hours = max(0.0, (next_ts - current.timestamp).total_seconds() / 3600.0)
+                else:
+                    delta_hours = 5.0 / 60.0
+                delta_hours = min(delta_hours, 0.25)
+                load_kwh = max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+                hourly_kwh[int(current.timestamp.hour)] += load_kwh
+                total_kwh += load_kwh
+
+            if total_kwh > 0:
+                day_profiles.append([value / total_kwh for value in hourly_kwh])
+
+        if not day_profiles:
+            return None
+
+        averaged = [0.0] * 24
+        for profile in day_profiles:
+            for hour in range(24):
+                averaged[hour] += profile[hour]
+        count = float(len(day_profiles))
+        averaged = [value / count for value in averaged]
+        s = sum(averaged)
+        if s <= 0:
+            return None
+        return [value / s for value in averaged]
+
+    @staticmethod
+    def rolling_average_hourly_pv_profile(
+        reference_day: date,
+        lookback_days: int,
+        min_samples_per_day: int,
+    ) -> list[float] | None:
+        """Return 24 expected PV kWh values per hour from historical snapshots."""
+        hourly_totals = [0.0] * 24
+        day_count = 0
+
+        for offset in range(1, max(lookback_days, 1) + 1):
+            day = reference_day - timedelta(days=offset)
+            day_start = datetime.combine(day, datetime.min.time())
+            day_end = day_start + timedelta(days=1)
+
+            with SessionLocal() as session:
+                snapshots = list(
+                    session.execute(
+                        select(PowerSnapshot)
+                        .where(
+                            PowerSnapshot.timestamp >= day_start,
+                            PowerSnapshot.timestamp < day_end,
+                        )
+                        .order_by(PowerSnapshot.timestamp.asc())
+                    ).scalars()
+                )
+
+            if len(snapshots) < min_samples_per_day:
+                continue
+
+            day_hourly = [0.0] * 24
+            for idx, current in enumerate(snapshots):
+                if idx + 1 < len(snapshots):
+                    next_ts = snapshots[idx + 1].timestamp
+                    delta_hours = max(0.0, (next_ts - current.timestamp).total_seconds() / 3600.0)
+                else:
+                    delta_hours = 5.0 / 60.0
+
+                delta_hours = min(delta_hours, 0.25)
+                pv_kwh = max(0.0, float(current.pv_power_w) / 1000.0) * delta_hours
+                day_hourly[int(current.timestamp.hour)] += pv_kwh
+
+            for hour in range(24):
+                hourly_totals[hour] += day_hourly[hour]
+            day_count += 1
+
+        if day_count == 0:
+            return None
+
+        return [value / float(day_count) for value in hourly_totals]
+
+    @staticmethod
+    def estimate_consumption_kwh_in_window(start: datetime, end: datetime) -> tuple[float, int]:
+        with SessionLocal() as session:
+            snapshots = list(
+                session.execute(
+                    select(PowerSnapshot)
+                    .where(
+                        PowerSnapshot.timestamp >= start,
+                        PowerSnapshot.timestamp < end,
+                    )
+                    .order_by(PowerSnapshot.timestamp.asc())
+                ).scalars()
+            )
+
+        if not snapshots:
+            return 0.0, 0
+
+        total_kwh = 0.0
+        for idx, current in enumerate(snapshots):
+            if idx + 1 < len(snapshots):
+                next_ts = snapshots[idx + 1].timestamp
+                delta_hours = max(0.0, (next_ts - current.timestamp).total_seconds() / 3600.0)
+            else:
+                delta_hours = 5.0 / 60.0
+            delta_hours = min(delta_hours, 0.25)
+            total_kwh += max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+
+        return round(total_kwh, 3), len(snapshots)
+
 
 class PlanRepository:
     @staticmethod
@@ -227,5 +440,38 @@ class SimulationRepository:
                     select(SimulationPoint)
                     .where(SimulationPoint.date_key == day_key)
                     .order_by(SimulationPoint.timestamp.asc())
+                ).scalars()
+            )
+
+
+class KPIRepository:
+    @staticmethod
+    def upsert_daily_kpi(kpi: PlannerKPI) -> None:
+        with SessionLocal() as session:
+            existing = session.execute(
+                select(PlannerKPI).where(PlannerKPI.date_key == kpi.date_key)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(kpi)
+            else:
+                existing.planned_grid_kwh = kpi.planned_grid_kwh
+                existing.actual_grid_kwh = kpi.actual_grid_kwh
+                existing.planned_peak_import_kwh = kpi.planned_peak_import_kwh
+                existing.actual_peak_import_kwh = kpi.actual_peak_import_kwh
+                existing.plan_error_ratio = kpi.plan_error_ratio
+                existing.soc_at_peak_start = kpi.soc_at_peak_start
+                existing.expected_daily_consumption_kwh = kpi.expected_daily_consumption_kwh
+                existing.realized_daily_consumption_kwh = kpi.realized_daily_consumption_kwh
+                existing.updated_at = kpi.updated_at
+            session.commit()
+
+    @staticmethod
+    def get_recent(limit: int = 7) -> list[PlannerKPI]:
+        with SessionLocal() as session:
+            return list(
+                session.execute(
+                    select(PlannerKPI)
+                    .order_by(PlannerKPI.date_key.desc())
+                    .limit(max(1, limit))
                 ).scalars()
             )

@@ -131,3 +131,16 @@ class PlanningChartOut(BaseModel):
     action_hours: dict[str, int]
     cheapest_hours: list[str]
     most_expensive_hours: list[str]
+
+
+class PlannerKPIOut(BaseModel):
+    date_key: str
+    planned_grid_kwh: float
+    actual_grid_kwh: float
+    planned_peak_import_kwh: float
+    actual_peak_import_kwh: float
+    plan_error_ratio: float
+    soc_at_peak_start: float
+    expected_daily_consumption_kwh: float
+    realized_daily_consumption_kwh: float
+    updated_at: datetime

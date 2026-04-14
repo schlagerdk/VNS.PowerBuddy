@@ -53,3 +53,20 @@ class SimulationPoint(Base):
     action: Mapped[str] = mapped_column(String(16), default="hold")
     projected_soc: Mapped[float] = mapped_column(Float, default=0)
     projected_grid_kwh: Mapped[float] = mapped_column(Float, default=0)
+
+
+class PlannerKPI(Base):
+    __tablename__ = "planner_kpis"
+    __table_args__ = (UniqueConstraint("date_key", name="uq_planner_kpi_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date_key: Mapped[str] = mapped_column(String(10), index=True)
+    planned_grid_kwh: Mapped[float] = mapped_column(Float, default=0)
+    actual_grid_kwh: Mapped[float] = mapped_column(Float, default=0)
+    planned_peak_import_kwh: Mapped[float] = mapped_column(Float, default=0)
+    actual_peak_import_kwh: Mapped[float] = mapped_column(Float, default=0)
+    plan_error_ratio: Mapped[float] = mapped_column(Float, default=0)
+    soc_at_peak_start: Mapped[float] = mapped_column(Float, default=0)
+    expected_daily_consumption_kwh: Mapped[float] = mapped_column(Float, default=0)
+    realized_daily_consumption_kwh: Mapped[float] = mapped_column(Float, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -270,47 +270,37 @@ class FroniusClient(InverterClient):
             is_hold = action == "hold"
             max_charge_w = int(max(0.0, min(float(settings.max_charge_kw), float(settings.planned_charge_kw)) * 1000.0))
 
-            # charge: lock SOC to 100%, hold: lock SOC to current value, discharge: automatic mode.
-            # Keep both source flags enabled in discharge/auto mode.
-            allow_external_charge_sources = is_charge or action == "discharge"
-            ac_charge_enabled = allow_external_charge_sources
+            # All modes use auto mode for SOC control; allowed charge sources controlled via HYB_BM_CHARGEFROMAC.
+            # charge: allow grid+PV, hold: check PV level for solar capture, discharge: no external charging.
             em_mode = 1 if is_charge else 0
             em_power = int(max(charge_power_w or 0.0, float(max_charge_w))) if is_charge else 0
 
+            # Default: no external charging (auto mode with min-max bounds prevents drift).
+            allow_external_charge_sources = is_charge
             soc_mode = "auto"
             soc_min = int(settings.battery_min_soc)
             soc_max = 100
-            if is_charge:
-                soc_mode = "manual"
-                soc_min = 100
-                soc_max = 100
-            elif is_hold:
+
+            if is_hold:
+                # Check if we should allow solar capture (external charging from home generation).
                 try:
                     realtime = await self.get_realtime()
-                    soc_raw = float(realtime.battery_soc)
-                    p_batt = float(realtime.battery_power_w)
-                    floor_soc = int(soc_raw)
-                    ceil_soc = floor_soc if soc_raw <= float(floor_soc) else floor_soc + 1
-                    # Directional lock avoids reinforcing current drift in HOLD.
-                    if p_batt > 120.0:
-                        locked_soc = ceil_soc
-                    elif p_batt < -120.0:
-                        locked_soc = floor_soc
-                    else:
-                        locked_soc = int(round(soc_raw))
+                    pv_w = float(realtime.pv_power_w)
+                    grid_w = float(realtime.grid_power_w)
+                    high_pv = pv_w >= float(settings.hold_solar_capture_pv_w_threshold)
+                    exporting = grid_w <= float(settings.hold_solar_capture_export_w_threshold)
+                    allow_external_charge_sources = (
+                        bool(settings.hold_solar_capture_enabled) and (high_pv or exporting)
+                    )
                 except Exception:
-                    locked_soc = int((float(settings.battery_min_soc) + float(settings.battery_max_soc)) / 2.0)
-                locked_soc = max(int(settings.battery_min_soc), min(int(settings.battery_max_soc), locked_soc))
-                soc_mode = "manual"
-                soc_min = locked_soc
-                soc_max = locked_soc
+                    allow_external_charge_sources = False
 
             battery_cfg_result = await self._fronius_digest_request(
                 "POST",
                 "/api/config/batteries",
                 {
-                    "HYB_BM_CHARGEFROMAC": ac_charge_enabled,
-                    "HYB_EVU_CHARGEFROMGRID": allow_external_charge_sources,
+                    "HYB_BM_CHARGEFROMAC": allow_external_charge_sources,
+                    "HYB_EVU_CHARGEFROMGRID": is_charge,
                     "HYB_EM_MODE": em_mode,
                     "HYB_EM_POWER": em_power,
                     "BAT_M0_SOC_MODE": soc_mode,

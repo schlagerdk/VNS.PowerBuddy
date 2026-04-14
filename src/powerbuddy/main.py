@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from powerbuddy.config import settings
 from powerbuddy.database import init_db
 from powerbuddy.models import PlanAction
-from powerbuddy.repositories import PlanRepository, PowerRepository, PriceRepository, SimulationRepository
+from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.schemas import (
     InverterRealtime,
     ManualOverrideIn,
@@ -18,6 +18,7 @@ from powerbuddy.schemas import (
     PlanNowStatusOut,
     PlanActionUpdateIn,
     PlanReplaceIn,
+    PlannerKPIOut,
     PlanningChartOut,
     PriceOut,
     SimulationPointOut,
@@ -31,6 +32,7 @@ from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.pricing import get_price_provider
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
+from powerbuddy.services.weather import weather_forecast_service
 
 
 scheduler = PowerBuddyScheduler()
@@ -49,6 +51,7 @@ openapi_tags = [
     {"name": "prices", "description": "Spot price fetch/read endpoints."},
     {"name": "tariff", "description": "Network tariffs and fee configuration/overrides."},
     {"name": "planning", "description": "Battery charge/discharge planning and simulation."},
+    {"name": "kpi", "description": "Planning quality metrics and backtesting signals."},
     {"name": "inverter", "description": "Live inverter telemetry."},
 ]
 
@@ -103,7 +106,7 @@ def index() -> dict[str, object]:
 
 
 async def _resolve_current_soc() -> float:
-    """Fetch live SOC from inverter; fall back to latest DB snapshot, then 50.0."""
+    """Fetch live SOC from inverter; fall back to latest DB snapshot, then assume battery was charged overnight to 85%."""
     try:
         client = get_inverter_client()
         data = await client.get_realtime()
@@ -111,7 +114,8 @@ async def _resolve_current_soc() -> float:
     except Exception:
         pass
     snapshot_soc = PowerRepository.get_latest_battery_soc()
-    return snapshot_soc if snapshot_soc is not None else 50.0
+    # If no realtime data and no recent snapshot, assume battery was charged overnight (85% default makes plans realistic).
+    return snapshot_soc if snapshot_soc is not None else 85.0
 
 
 async def _ensure_prices_with_fallback(requested_day: date) -> tuple[date, list, bool]:
@@ -178,11 +182,16 @@ async def _refresh_simulation_for_day(day: date, actions: list[PlanAction] | Non
     day_actions = actions if actions is not None else PlanRepository.get_plan(day_key)
 
     current_soc = await _resolve_current_soc()
+    weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
     if day == date.today():
         now_local_hour = datetime.now(ZoneInfo(settings.timezone)).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
         day_actions = [a for a in day_actions if _naive_ts(a.start_time) >= now_local_hour]
 
-    simulation = planner.simulate(day, day_actions, start_soc=current_soc) if day_actions else []
+    simulation = (
+        planner.simulate(day, day_actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors)
+        if day_actions
+        else []
+    )
     SimulationRepository.replace_points(day_key, simulation)
 
 
@@ -202,10 +211,40 @@ def get_config() -> dict[str, object]:
         "inverter_type": settings.inverter_type,
         "inverter_url": settings.fronius_url,
         "feed_in_tariff_ore": settings.feed_in_tariff_ore,
+        "charge_efficiency": settings.charge_efficiency,
+        "discharge_efficiency": settings.discharge_efficiency,
+        "cycle_degradation_cost_ore_per_kwh": settings.cycle_degradation_cost_ore_per_kwh,
+        "reserve_soc_enabled": settings.reserve_soc_enabled,
+        "reserve_soc_window": [settings.reserve_soc_start_hour_local, settings.reserve_soc_end_hour_local],
+        "reserve_soc_min_percent": settings.reserve_soc_min_percent,
+        "pv_forecast_enabled": settings.pv_forecast_enabled,
+        "intraday_replan_enabled": settings.intraday_replan_enabled,
+        "kpi_tracking_enabled": settings.kpi_tracking_enabled,
+        "auto_tuning_enabled": settings.auto_tuning_enabled,
         "plan_execution_mode": execution_mode,
         "config_source": ".env",
         "runtime_mutable": False,
     }
+
+
+@app.get("/kpi/planning", tags=["kpi"], summary="Read recent planning KPIs")
+def get_planner_kpis(limit: int = 14) -> list[PlannerKPIOut]:
+    items = KPIRepository.get_recent(limit=max(1, min(limit, 90)))
+    return [
+        PlannerKPIOut(
+            date_key=item.date_key,
+            planned_grid_kwh=item.planned_grid_kwh,
+            actual_grid_kwh=item.actual_grid_kwh,
+            planned_peak_import_kwh=item.planned_peak_import_kwh,
+            actual_peak_import_kwh=item.actual_peak_import_kwh,
+            plan_error_ratio=item.plan_error_ratio,
+            soc_at_peak_start=item.soc_at_peak_start,
+            expected_daily_consumption_kwh=item.expected_daily_consumption_kwh,
+            realized_daily_consumption_kwh=item.realized_daily_consumption_kwh,
+            updated_at=item.updated_at,
+        )
+        for item in items
+    ]
 
 
 @app.post("/prices/fetch", tags=["prices"], summary="Fetch spot prices")
@@ -280,6 +319,7 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
     day_key = used_day.isoformat()
     expected_daily_consumption_kwh, consumption_source = planner.resolve_expected_daily_consumption(used_day)
     current_soc = await _resolve_current_soc()
+    weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(used_day)
     network_tariff = await tariff_service.get_network_tariff_24h()
 
     all_actions = PlanRepository.get_plan(day_key)
@@ -288,7 +328,13 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
         network_tariff_bootstrap = await tariff_service.get_network_tariff_24h()
         tariff_24h_bootstrap = tariff_service.total_tariff_ore_24h(network_tariff_bootstrap)
         actions = planner.plan(
-            PlannerInput(day=used_day, price_points=prices, start_soc=current_soc, tariff_ore_per_hour=tariff_24h_bootstrap)
+            PlannerInput(
+                day=used_day,
+                price_points=prices,
+                start_soc=current_soc,
+                tariff_ore_per_hour=tariff_24h_bootstrap,
+                pv_weather_factor_24h=weather_factors,
+            )
         )
         PlanRepository.replace_plan(day_key, actions)
         all_actions = PlanRepository.get_plan(day_key)
@@ -299,7 +345,12 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
     else:
         simulation = SimulationRepository.get_points(day_key)
         if not simulation:
-            simulation = planner.simulate(used_day, all_actions, start_soc=current_soc)
+            simulation = planner.simulate(
+                used_day,
+                all_actions,
+                start_soc=current_soc,
+                pv_weather_factor_24h=weather_factors,
+            )
             SimulationRepository.replace_points(day_key, simulation)
 
     price_by_ts = {p.timestamp: p for p in prices}
@@ -474,15 +525,27 @@ async def generate_plan(target_date: date | None = None) -> dict[str, int]:
         raise HTTPException(status_code=400, detail="No prices found for requested date")
 
     current_soc = await _resolve_current_soc()
+    weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
     network_tariff = await tariff_service.get_network_tariff_24h()
     tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
     plan_actions = planner.plan(
-        PlannerInput(day=day, price_points=prices, start_soc=current_soc, tariff_ore_per_hour=tariff_24h)
+        PlannerInput(
+            day=day,
+            price_points=prices,
+            start_soc=current_soc,
+            tariff_ore_per_hour=tariff_24h,
+            pv_weather_factor_24h=weather_factors,
+        )
     )
     day_key = day.isoformat()
     PlanRepository.replace_plan(day_key, plan_actions)
 
-    simulation = planner.simulate(day, PlanRepository.get_plan(day_key), current_soc)
+    simulation = planner.simulate(
+        day,
+        PlanRepository.get_plan(day_key),
+        current_soc,
+        pv_weather_factor_24h=weather_factors,
+    )
     SimulationRepository.replace_points(day_key, simulation)
     await _reconcile_after_plan_change()
     return {"actions": len(plan_actions)}
@@ -608,7 +671,8 @@ async def simulate_plan(target_date: date | None = None) -> list[SimulationPoint
         raise HTTPException(status_code=400, detail="No plan found for requested date")
 
     current_soc = await _resolve_current_soc()
-    simulation = planner.simulate(day, actions, start_soc=current_soc)
+    weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
+    simulation = planner.simulate(day, actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors)
     SimulationRepository.replace_points(day_key, simulation)
 
     points = SimulationRepository.get_points(day_key)

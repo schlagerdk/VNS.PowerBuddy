@@ -5,14 +5,17 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select
 
 from powerbuddy.config import settings
-from powerbuddy.models import PlanAction, PowerSnapshot
-from powerbuddy.repositories import PlanRepository, PowerRepository, PriceRepository, SimulationRepository
+from powerbuddy.database import SessionLocal
+from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot
+from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.pricing import PricePoint, get_price_provider
 from powerbuddy.services.tariff import tariff_service
+from powerbuddy.services.weather import weather_forecast_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ class PowerBuddyScheduler:
         self.inverter_client = get_inverter_client()
         self.planner = DayPlanner()
         self._last_solar_replan_at: datetime | None = None
+        self._last_intraday_replan_at: datetime | None = None
         self._last_executed_signature: tuple[str, str, str] | None = None
         self._last_executed_at: datetime | None = None
 
@@ -38,13 +42,17 @@ class PowerBuddyScheduler:
         except Exception:
             return PowerRepository.get_latest_battery_soc() or 50.0
 
-    async def _plan_and_simulate(self, day: date, prices: list[PricePoint], soc: float) -> None:
+    async def _plan_and_simulate(self, day: date, prices: list[PricePoint], soc: float, lock_hours: int = 0) -> None:
         tz = ZoneInfo(settings.timezone)
         now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
         planning_start = now_local_hour if day == now_local_hour.date() else None
+        lock_end = None
+        if planning_start is not None and lock_hours > 0:
+            lock_end = planning_start + timedelta(hours=max(0, int(lock_hours)))
 
         network_tariff = await tariff_service.get_network_tariff_24h()
         tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
+        weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
         day_key = day.isoformat()
 
         frozen_actions: list[PlanAction] = []
@@ -54,7 +62,8 @@ class PowerBuddyScheduler:
                 if action.is_manual_override:
                     continue
                 end = action.end_time.replace(tzinfo=None) if action.end_time.tzinfo else action.end_time
-                if end <= planning_start:
+                freeze_boundary = lock_end if lock_end is not None else planning_start
+                if end <= freeze_boundary:
                     frozen_actions.append(
                         PlanAction(
                             date_key=action.date_key,
@@ -75,19 +84,43 @@ class PowerBuddyScheduler:
                 start_soc=soc,
                 planning_start_time=planning_start,
                 tariff_ore_per_hour=tariff_24h,
+                pv_weather_factor_24h=weather_factors,
             )
         )
         actions = frozen_actions + actions_future
         PlanRepository.replace_plan(day_key, actions)
         actions_for_simulation = PlanRepository.get_plan(day_key)
         if planning_start is not None:
+            simulation_boundary = lock_end if lock_end is not None else planning_start
             actions_for_simulation = [
                 action
                 for action in actions_for_simulation
-                if (action.start_time.replace(tzinfo=None) if action.start_time.tzinfo else action.start_time) >= planning_start
+                if (action.start_time.replace(tzinfo=None) if action.start_time.tzinfo else action.start_time) >= simulation_boundary
             ]
-        simulation = self.planner.simulate(day, actions_for_simulation, soc) if actions_for_simulation else []
+        simulation = (
+            self.planner.simulate(day, actions_for_simulation, soc, pv_weather_factor_24h=weather_factors)
+            if actions_for_simulation
+            else []
+        )
         SimulationRepository.replace_points(day_key, simulation)
+
+    def _window_expected_consumption_kwh(self, start: datetime, end: datetime) -> float:
+        if end <= start:
+            return 0.0
+
+        expected_daily, _ = self.planner.resolve_expected_daily_consumption(start.date())
+        profile, _ = self.planner.resolve_hourly_consumption_profile(start.date())
+
+        current = start
+        total = 0.0
+        while current < end:
+            next_hour = (current + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            segment_end = min(end, next_hour)
+            segment_hours = max(0.0, (segment_end - current).total_seconds() / 3600.0)
+            total += expected_daily * profile[current.hour] * segment_hours
+            current = segment_end
+
+        return max(0.0, total)
 
     def _horizon_days_from_now(self) -> list[date]:
         """
@@ -242,6 +275,170 @@ class PowerBuddyScheduler:
             load_w,
         )
 
+    async def intraday_guarded_replan(self) -> None:
+        """
+        Intraday re-plan with guardrails:
+        - runs on interval
+        - triggers only when recent consumption deviates enough from expectation
+        - keeps the next N hours frozen to avoid churn
+        """
+        if not settings.intraday_replan_enabled:
+            return
+
+        now = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+        lock_hours = max(0, int(settings.intraday_replan_lock_hours))
+        lookback_hours = max(1, lock_hours)
+        start = now - timedelta(hours=lookback_hours)
+
+        actual_kwh, samples = PowerRepository.estimate_consumption_kwh_in_window(start=start, end=now)
+        if samples == 0:
+            return
+
+        expected_kwh = self._window_expected_consumption_kwh(start=start, end=now)
+        if expected_kwh <= 0.1:
+            return
+
+        deviation = abs(actual_kwh - expected_kwh) / expected_kwh
+        threshold = max(0.05, float(settings.intraday_replan_consumption_deviation_trigger_ratio))
+        if deviation < threshold:
+            return
+
+        day = now.date()
+        prices = PriceRepository.get_by_day(day, settings.price_area)
+        if not prices:
+            try:
+                fetched = await self.price_provider.get_day_prices(day, settings.price_area)
+                if fetched:
+                    PriceRepository.upsert_prices(fetched)
+                    prices = PriceRepository.get_by_day(day, settings.price_area)
+            except Exception as exc:
+                logger.warning("Intraday replan price fetch failed for %s: %s", day, exc)
+                return
+        if not prices:
+            return
+
+        soc = await self._fetch_soc()
+        await self._plan_and_simulate(day, prices, soc, lock_hours=lock_hours)
+        self._last_intraday_replan_at = datetime.now()
+        logger.info(
+            "Intraday guarded replan executed (actual=%.2f kWh expected=%.2f kWh deviation=%.1f%%)",
+            actual_kwh,
+            expected_kwh,
+            deviation * 100.0,
+        )
+
+    async def update_planner_kpis_and_autotune(self) -> None:
+        if not settings.kpi_tracking_enabled:
+            return
+
+        tz = ZoneInfo(settings.timezone)
+        target_day = (datetime.now(tz) - timedelta(days=1)).date()
+        day_key = target_day.isoformat()
+
+        simulation = SimulationRepository.get_points(day_key)
+        planned_grid_kwh = sum(max(0.0, float(point.projected_grid_kwh)) for point in simulation)
+
+        reserve_start = max(0, min(23, int(settings.reserve_soc_start_hour_local)))
+        reserve_end = max(1, min(24, int(settings.reserve_soc_end_hour_local)))
+
+        def _in_peak(hour: int) -> bool:
+            if reserve_start < reserve_end:
+                return reserve_start <= hour < reserve_end
+            return hour >= reserve_start or hour < reserve_end
+
+        planned_peak_import_kwh = sum(
+            max(0.0, float(point.projected_grid_kwh))
+            for point in simulation
+            if _in_peak(point.timestamp.astimezone(tz).hour if point.timestamp.tzinfo else point.timestamp.hour)
+        )
+
+        day_start = datetime.combine(target_day, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        with_peak_start = day_start + timedelta(hours=reserve_start)
+        with_peak_end = day_start + timedelta(hours=reserve_end if reserve_end > reserve_start else reserve_end + 24)
+
+        actual_grid_kwh = 0.0
+        actual_peak_import_kwh = 0.0
+        with SessionLocal() as session:
+            snapshots = list(
+                session.execute(
+                    select(PowerSnapshot)
+                    .where(
+                        PowerSnapshot.timestamp >= day_start,
+                        PowerSnapshot.timestamp < day_end,
+                    )
+                    .order_by(PowerSnapshot.timestamp.asc())
+                ).scalars()
+            )
+
+        for idx, current in enumerate(snapshots):
+            if idx + 1 < len(snapshots):
+                next_ts = snapshots[idx + 1].timestamp
+                delta_hours = max(0.0, (next_ts - current.timestamp).total_seconds() / 3600.0)
+            else:
+                delta_hours = 5.0 / 60.0
+            delta_hours = min(delta_hours, 0.25)
+
+            import_kwh = max(0.0, float(current.grid_power_w) / 1000.0) * delta_hours
+            actual_grid_kwh += import_kwh
+
+            ts = current.timestamp.replace(tzinfo=None) if current.timestamp.tzinfo else current.timestamp
+            peak_match = False
+            if reserve_start < reserve_end:
+                peak_match = reserve_start <= ts.hour < reserve_end
+            else:
+                peak_match = ts.hour >= reserve_start or ts.hour < reserve_end
+            if peak_match:
+                actual_peak_import_kwh += import_kwh
+
+        expected_daily_consumption_kwh, _ = self.planner.resolve_expected_daily_consumption(target_day)
+        realized_daily_consumption_kwh, _ = PowerRepository.estimate_daily_consumption_kwh(target_day)
+        baseline = max(1.0, actual_grid_kwh)
+        plan_error_ratio = abs(actual_grid_kwh - planned_grid_kwh) / baseline
+
+        soc_at_peak_start = 0.0
+        peak_candidates = [s for s in snapshots if (s.timestamp.hour == reserve_start)]
+        if peak_candidates:
+            soc_at_peak_start = float(peak_candidates[0].battery_soc)
+        elif snapshots:
+            soc_at_peak_start = float(snapshots[-1].battery_soc)
+
+        KPIRepository.upsert_daily_kpi(
+            PlannerKPI(
+                date_key=day_key,
+                planned_grid_kwh=round(planned_grid_kwh, 3),
+                actual_grid_kwh=round(actual_grid_kwh, 3),
+                planned_peak_import_kwh=round(planned_peak_import_kwh, 3),
+                actual_peak_import_kwh=round(actual_peak_import_kwh, 3),
+                plan_error_ratio=round(plan_error_ratio, 4),
+                soc_at_peak_start=round(soc_at_peak_start, 2),
+                expected_daily_consumption_kwh=round(expected_daily_consumption_kwh, 3),
+                realized_daily_consumption_kwh=round(realized_daily_consumption_kwh, 3),
+                updated_at=datetime.now(tz),
+            )
+        )
+
+        if not settings.auto_tuning_enabled:
+            return
+
+        recent = KPIRepository.get_recent(limit=5)
+        if not recent:
+            return
+
+        ratios = [k.realized_daily_consumption_kwh / max(1.0, k.expected_daily_consumption_kwh) for k in recent]
+        target_ratio = sum(ratios) / len(ratios)
+        step_limit = max(0.01, float(settings.auto_tuning_step_max_ratio))
+        bounded_ratio = max(1.0 - step_limit, min(1.0 + step_limit, target_ratio))
+        settings.expected_daily_consumption_kwh = max(
+            5.0,
+            float(settings.expected_daily_consumption_kwh) * bounded_ratio,
+        )
+        logger.info(
+            "Auto-tuned expected_daily_consumption_kwh to %.2f (ratio %.3f)",
+            settings.expected_daily_consumption_kwh,
+            bounded_ratio,
+        )
+
     async def execute_current_plan_action(self) -> None:
         """
         Execution layer: applies the currently active plan action to inverter.
@@ -321,6 +518,23 @@ class PowerBuddyScheduler:
         # Power snapshot every 5 minutes
         self.scheduler.add_job(self.snapshot_power, "interval", minutes=5, id="power-snapshot")
 
+        # Guarded intraday replan using recent deviation from expected load.
+        self.scheduler.add_job(
+            self.intraday_guarded_replan,
+            "interval",
+            minutes=max(5, int(settings.intraday_replan_interval_minutes)),
+            id="intraday-guarded-replan",
+        )
+
+        # KPI and auto-tuning once per day.
+        self.scheduler.add_job(
+            self.update_planner_kpis_and_autotune,
+            "cron",
+            hour=0,
+            minute=25,
+            id="planner-kpi-autotune",
+        )
+
         # Apply active plan action to inverter.
         self.scheduler.add_job(
             self.execute_current_plan_action,
@@ -337,6 +551,8 @@ class PowerBuddyScheduler:
         import asyncio
         loop = asyncio.get_event_loop()
         loop.create_task(self.refresh_prices_and_replan())
+        loop.create_task(self.intraday_guarded_replan())
+        loop.create_task(self.update_planner_kpis_and_autotune())
         loop.create_task(self.execute_current_plan_action())
 
     def shutdown(self) -> None:
