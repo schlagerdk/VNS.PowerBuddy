@@ -271,7 +271,8 @@ class FroniusClient(InverterClient):
             max_charge_w = int(max(0.0, min(float(settings.max_charge_kw), float(settings.planned_charge_kw)) * 1000.0))
 
             # charge: lock SOC to 100%, hold: lock SOC to current value, discharge: automatic mode.
-            ac_charge_enabled = is_charge
+            # Keep AC charging-from-other-sources enabled in discharge/auto mode.
+            ac_charge_enabled = is_charge or action == "discharge"
             em_mode = 1 if is_charge else 0
             em_power = int(max(charge_power_w or 0.0, float(max_charge_w))) if is_charge else 0
 

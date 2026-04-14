@@ -425,12 +425,15 @@ async def get_current_plan_status() -> PlanNowStatusOut:
     # On this Fronius setup, negative battery power indicates charging and positive indicates discharging.
     is_charging = battery_power_w < -50.0
     is_discharging = battery_power_w > 50.0
+    soc = float(realtime.battery_soc)
+    at_min_soc = soc <= float(settings.battery_min_soc) + 0.2
+    at_max_soc = soc >= float(settings.battery_max_soc) - 0.2
 
     # PowerBuddy currently provides planning only (no direct inverter dispatch).
     # This makes it explicit when realtime behavior differs from the plan.
     matches = (
-        (current_action == "charge" and is_charging)
-        or (current_action == "discharge" and is_discharging)
+        (current_action == "charge" and (is_charging or at_max_soc))
+        or (current_action == "discharge" and (is_discharging or at_min_soc))
         or (current_action == "hold" and not is_charging and not is_discharging)
     )
 
