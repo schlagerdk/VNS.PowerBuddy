@@ -296,23 +296,19 @@ class FroniusClient(InverterClient):
                 except Exception:
                     force_load_power_w = max_charge_w
 
-            # charge: manual SoC mode locked to 100%, allow grid+home charging.
-            # hold: manual SoC mode locked to current SoC, no external charging.
-            # auto: automatic SoC mode, allow grid+home charging.
-            # discharge: automatic SoC mode, allow grid+home charging + active discharge control.
-            em_mode = 1 if is_charge else 0
+            # charge/auto/discharge: automatic SoC mode; behavior is controlled by
+            # time-dependent battery control rules (CHARGE_MIN / DISCHARGE_MAX).
+            # hold: manual SoC mode locked to current SoC.
+            em_mode = 0
             em_power = force_load_power_w if is_charge else 0
 
             allow_external_charge_sources = is_charge or is_auto or is_discharge
             allow_grid_charge = is_charge or is_auto or is_discharge
-            soc_mode = "auto" if (is_auto or is_discharge) else "manual"
+            soc_mode = "manual" if is_hold else "auto"
             soc_min = int(settings.battery_min_soc)
             soc_max = 100
 
-            if is_charge:
-                soc_min = 100
-                soc_max = 100
-            elif is_hold:
+            if is_hold:
                 try:
                     realtime = await self.get_realtime()
                     current_soc = int(round(realtime.battery_soc))
