@@ -269,13 +269,35 @@ class FroniusClient(InverterClient):
             is_charge = action == "charge"
             is_hold = action == "hold"
             max_charge_w = int(max(0.0, float(settings.max_charge_kw) * 1000.0))
+            force_load_power_w = max_charge_w
+
+            if is_charge and settings.force_load_solar_aware_enabled:
+                try:
+                    realtime = await self.get_realtime()
+                    pv_w = max(0.0, float(realtime.pv_power_w))
+                    grid_import_w = max(0.0, float(realtime.grid_power_w))
+                    high_solar = pv_w >= float(settings.force_load_high_solar_pv_w_threshold)
+                    grid_import_limit_w = max(0.0, float(settings.force_load_grid_import_limit_w))
+
+                    if high_solar and grid_import_w > grid_import_limit_w:
+                        reduction = int(round(grid_import_w - grid_import_limit_w))
+                        force_load_power_w = max(0, max_charge_w - reduction)
+                        logger.info(
+                            "Solar-aware force load adjusted from %sW to %sW (pv=%.1fW, grid_import=%.1fW)",
+                            max_charge_w,
+                            force_load_power_w,
+                            pv_w,
+                            grid_import_w,
+                        )
+                except Exception:
+                    force_load_power_w = max_charge_w
 
             # charge: manual SoC mode locked to 100%, allow grid+home charging.
             # hold: manual SoC mode locked to current SoC, no external charging.
             # discharge: auto SoC mode, allow grid+home charging.
             is_discharge = action == "discharge"
             em_mode = 1 if is_charge else 0
-            em_power = max_charge_w if is_charge else 0
+            em_power = force_load_power_w if is_charge else 0
 
             allow_external_charge_sources = not is_hold
             allow_grid_charge = not is_hold
@@ -369,7 +391,7 @@ class FroniusClient(InverterClient):
 
             if is_charge:
                 schedule_type = "CHARGE_MIN"
-                power_w = max_charge_w
+                power_w = force_load_power_w
                 # Keep rule active for full day; scheduler updates this action frequently.
                 slot_start = "00:00"
                 slot_end = "23:59"

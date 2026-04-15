@@ -72,6 +72,18 @@ class Settings(BaseSettings):
         default=-500.0,
         alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_EXPORT_W_THRESHOLD",
     )
+    force_load_solar_aware_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_FORCE_LOAD_SOLAR_AWARE_ENABLED",
+    )
+    force_load_high_solar_pv_w_threshold: float = Field(
+        default=2500.0,
+        alias="POWERBUDDY_FORCE_LOAD_HIGH_SOLAR_PV_W_THRESHOLD",
+    )
+    force_load_grid_import_limit_w: float = Field(
+        default=200.0,
+        alias="POWERBUDDY_FORCE_LOAD_GRID_IMPORT_LIMIT_W",
+    )
 
     expected_daily_consumption_kwh: float = Field(
         default=60.0,
