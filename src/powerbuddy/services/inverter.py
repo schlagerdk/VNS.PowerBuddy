@@ -268,14 +268,14 @@ class FroniusClient(InverterClient):
 
             is_charge = action == "charge"
             is_hold = action == "hold"
-            max_charge_w = int(max(0.0, min(float(settings.max_charge_kw), float(settings.planned_charge_kw)) * 1000.0))
+            max_charge_w = int(max(0.0, float(settings.max_charge_kw) * 1000.0))
 
             # charge: manual SoC mode locked to 100%, allow grid+home charging.
             # hold: manual SoC mode locked to current SoC, no external charging.
             # discharge: auto SoC mode, allow grid+home charging.
             is_discharge = action == "discharge"
             em_mode = 1 if is_charge else 0
-            em_power = int(max(charge_power_w or 0.0, float(max_charge_w))) if is_charge else 0
+            em_power = max_charge_w if is_charge else 0
 
             allow_external_charge_sources = not is_hold
             allow_grid_charge = not is_hold
@@ -325,8 +325,8 @@ class FroniusClient(InverterClient):
                 return False
 
             entries = [self._sanitize_tou_entry(e) for e in raw_entries if isinstance(e, dict)]
-            # PowerBuddy manages only MAX rules; remove stale MIN rules/duplicates from prior tests.
-            allowed_types = {"CHARGE_MAX", "DISCHARGE_MAX"}
+            # PowerBuddy manages charge/discharge limits explicitly.
+            allowed_types = {"CHARGE_MIN", "CHARGE_MAX", "DISCHARGE_MAX"}
             compacted: list[dict] = []
             seen_types: set[str] = set()
             for entry in entries:
@@ -341,6 +341,13 @@ class FroniusClient(InverterClient):
 
             if not entries:
                 entries = [
+                    {
+                        "Active": False,
+                        "Power": 0,
+                        "ScheduleType": "CHARGE_MIN",
+                        "TimeTable": {"Start": "00:00", "End": "23:59"},
+                        "Weekdays": {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True},
+                    },
                     {
                         "Active": False,
                         "Power": 0,
@@ -361,11 +368,18 @@ class FroniusClient(InverterClient):
                 e["Active"] = False
 
             if is_charge:
-                schedule_type = "CHARGE_MAX"
-                power_w = int(max(charge_power_w or 0.0, float(max_charge_w)))
+                schedule_type = "CHARGE_MIN"
+                power_w = max_charge_w
                 # Keep rule active for full day; scheduler updates this action frequently.
                 slot_start = "00:00"
                 slot_end = "23:59"
+
+                charge_max = next((e for e in entries if e.get("ScheduleType") == "CHARGE_MAX"), None)
+                if charge_max is not None:
+                    charge_max["Active"] = False
+                    charge_max["Power"] = 0
+                    charge_max["TimeTable"] = {"Start": slot_start, "End": slot_end}
+                    charge_max["Weekdays"] = {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True}
 
                 target = None
                 for e in entries:
@@ -386,6 +400,8 @@ class FroniusClient(InverterClient):
                 target["Power"] = power_w
                 target["TimeTable"] = {"Start": slot_start, "End": slot_end}
                 target["Weekdays"] = {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True}
+
+                # In charge mode we force minimum charge only (no CHARGE_MAX override).
 
             result = await self._fronius_digest_request("POST", "/api/config/timeofuse", {"timeofuse": entries})
             ok = self._fronius_result_ok(result)
