@@ -531,6 +531,7 @@ class PowerBuddyScheduler:
         actions = PlanRepository.get_plan(day_key)
 
         current_action = "hold"
+        current_is_manual_override = False
         current_charge_power_w: float | None = None
         current_start = now_local.replace(minute=0, second=0, microsecond=0)
         current_end = current_start + timedelta(hours=1)
@@ -539,6 +540,7 @@ class PowerBuddyScheduler:
             end = action.end_time.replace(tzinfo=None) if action.end_time.tzinfo else action.end_time
             if start <= now_local < end:
                 current_action = action.action
+                current_is_manual_override = bool(action.is_manual_override)
                 current_charge_power_w = action.charge_power_w
                 current_start = start
                 current_end = end
@@ -547,8 +549,9 @@ class PowerBuddyScheduler:
         runtime_action = current_action
         realtime_for_hold: object | None = None
 
-        # Keep existing planner behavior: planned "discharge" maps to inverter auto mode.
-        if runtime_action == "discharge":
+            # Backward compatibility: old non-manual plans may still contain "discharge".
+            # New planner uses "auto" instead.
+            if runtime_action == "discharge" and not current_is_manual_override:
             runtime_action = "auto"
 
         # If plan says hold but we have high PV and SOC isn't full, switch to auto mode

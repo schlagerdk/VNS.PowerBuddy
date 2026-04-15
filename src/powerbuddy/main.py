@@ -523,6 +523,7 @@ async def get_current_plan_status() -> PlanNowStatusOut:
     matches = (
         (current_action == "charge" and (is_charging or at_max_soc))
         or (current_action == "discharge" and (is_discharging or at_min_soc))
+        or (current_action == "auto" and (is_charging or is_discharging or at_min_soc or at_max_soc))
         or (current_action == "hold" and not is_charging and not is_discharging)
     )
 

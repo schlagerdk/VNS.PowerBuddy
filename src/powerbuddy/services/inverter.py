@@ -71,7 +71,7 @@ class FroniusClient(InverterClient):
     def _action_url(action: str) -> str:
         if action == "charge":
             return settings.fronius_charge_url.strip()
-        if action in {"discharge", "auto", "discharge_force"}:
+        if action in {"auto", "discharge", "discharge_force"}:
             return settings.fronius_discharge_url.strip()
         return settings.fronius_hold_url.strip()
 
@@ -79,7 +79,7 @@ class FroniusClient(InverterClient):
     def _action_modbus_writes(action: str) -> list[tuple[int, int]]:
         if action == "charge":
             raw = settings.modbus_charge_writes_json.strip()
-        elif action in {"discharge", "auto", "discharge_force"}:
+        elif action in {"auto", "discharge", "discharge_force"}:
             raw = settings.modbus_discharge_writes_json.strip()
         else:
             raw = settings.modbus_hold_writes_json.strip()
@@ -268,8 +268,9 @@ class FroniusClient(InverterClient):
 
             is_charge = action == "charge"
             is_hold = action == "hold"
-            is_auto = action in {"auto", "discharge"}
-            is_discharge_force = action == "discharge_force"
+            is_auto = action == "auto"
+            # Keep discharge_force as a backwards-compatible alias.
+            is_discharge = action in {"discharge", "discharge_force"}
             max_charge_w = int(max(0.0, float(settings.max_charge_kw) * 1000.0))
             max_discharge_w = max(0, int(settings.force_discharge_power_w))
             force_load_power_w = max_charge_w
@@ -298,13 +299,13 @@ class FroniusClient(InverterClient):
             # charge: manual SoC mode locked to 100%, allow grid+home charging.
             # hold: manual SoC mode locked to current SoC, no external charging.
             # auto: automatic SoC mode, allow grid+home charging.
-            # discharge_force: discharge-focused mode, external charging disabled.
+            # discharge: automatic SoC mode, allow grid+home charging + active discharge control.
             em_mode = 1 if is_charge else 0
             em_power = force_load_power_w if is_charge else 0
 
-            allow_external_charge_sources = is_charge or is_auto
-            allow_grid_charge = is_charge or is_auto
-            soc_mode = "auto" if is_auto else "manual"
+            allow_external_charge_sources = is_charge or is_auto or is_discharge
+            allow_grid_charge = is_charge or is_auto or is_discharge
+            soc_mode = "auto" if (is_auto or is_discharge) else "manual"
             soc_min = int(settings.battery_min_soc)
             soc_max = 100
 
@@ -319,10 +320,6 @@ class FroniusClient(InverterClient):
                     current_soc = int(settings.battery_min_soc)
                 soc_min = current_soc
                 soc_max = current_soc
-            elif is_discharge_force:
-                # Opposite of charge-lock: keep SOC floor at configured minimum.
-                soc_min = int(settings.battery_min_soc)
-                soc_max = int(settings.battery_min_soc)
 
             battery_cfg_result = await self._fronius_digest_request(
                 "POST",
@@ -430,7 +427,7 @@ class FroniusClient(InverterClient):
                 target["TimeTable"] = {"Start": slot_start, "End": slot_end}
                 target["Weekdays"] = {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True}
 
-            if is_discharge_force:
+            if is_discharge:
                 schedule_type = "DISCHARGE_MAX"
                 power_w = max_discharge_w
                 slot_start = "00:00"

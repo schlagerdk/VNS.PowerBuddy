@@ -188,7 +188,7 @@ class DayPlanner:
             battery_delta = grid_charge_kwh * self.charge_efficiency
             return battery_delta, hourly_net_consumption_kwh + grid_charge_kwh, abs(battery_delta)
 
-        if action == "discharge":
+        if action in {"auto", "discharge"}:
             max_delivery_kwh = min(self.max_discharge_kwh, hourly_net_consumption_kwh)
             max_delivery_from_soc = available_energy_kwh * self.discharge_efficiency
             delivered_kwh = max(0.0, min(max_delivery_kwh, max_delivery_from_soc))
@@ -241,7 +241,8 @@ class DayPlanner:
         reserve_soc = max(soc_min, min(soc_max, int(round(float(settings.reserve_soc_min_percent)))))
         start_soc = max(soc_min, min(soc_max, int(round(data.start_soc))))
 
-        actions_space = ("charge", "hold", "discharge")
+        # Planner can only produce auto/charge/hold. Explicit discharge is manual-only.
+        actions_space = ("charge", "hold", "auto")
         inf = float("inf")
         eps = 1e-9
 
@@ -309,9 +310,9 @@ class DayPlanner:
             charge_power_w = None
             reason = "normal operation window"
 
-            if action == "discharge":
+            if action == "auto":
                 target_soc = float(next_soc)
-                reason = "robust optimization: discharge at expensive hour"
+                reason = "robust optimization: auto at expensive hour"
             elif action == "charge":
                 target_soc = float(next_soc)
                 grid_charge_kwh = max(0.0, delta_battery_kwh / max(self.charge_efficiency, 1e-6))
@@ -382,7 +383,7 @@ class DayPlanner:
                 else:
                     delta_battery, projected_grid_kwh, _ = self._transition("charge", soc_int, consumption_kwh)
                     soc = max(self.min_soc, min(self.max_soc, soc + (delta_battery / self.capacity_kwh) * 100.0))
-            elif action.action == "discharge":
+            elif action.action in {"auto", "discharge"}:
                 delta_battery, projected_grid_kwh, _ = self._transition("discharge", soc_int, consumption_kwh)
                 soc = max(self.min_soc, min(self.max_soc, soc + (delta_battery / self.capacity_kwh) * 100.0))
             else:

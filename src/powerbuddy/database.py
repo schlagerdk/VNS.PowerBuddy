@@ -27,3 +27,16 @@ def init_db() -> None:
         names = {row[1] for row in cols}
         if "charge_power_w" not in names:
             conn.execute(text("ALTER TABLE plan_actions ADD COLUMN charge_power_w FLOAT"))
+
+        # Data migration: planner no longer emits "discharge". Keep manual discharge rows,
+        # but convert non-manual legacy entries to "auto".
+        conn.execute(
+            text(
+                """
+                UPDATE plan_actions
+                SET action = 'auto'
+                WHERE action = 'discharge'
+                  AND COALESCE(is_manual_override, 0) = 0
+                """
+            )
+        )
