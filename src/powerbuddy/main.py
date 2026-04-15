@@ -590,9 +590,33 @@ async def generate_plan(target_date: date | None = None) -> dict[str, int]:
 
 
 @app.get("/planning", tags=["planning"], summary="Read battery plan")
-def get_plan(target_date: date | None = None) -> list[PlanActionOut]:
-    day = target_date or date.today()
-    actions = PlanRepository.get_plan(day.isoformat())
+def get_plan(
+    target_date: date | None = None,
+    from_timestamp: datetime | None = None,
+    hours: int | None = None,
+) -> list[PlanActionOut]:
+    """
+    If target_date is provided: return that calendar day's plan.
+    Otherwise: return a rolling plan window from current whole UTC hour
+    (or from_timestamp) and forward; default window is at least 48 hours.
+    """
+    if target_date is not None:
+        actions = PlanRepository.get_plan(target_date.isoformat())
+    else:
+        default_hours = max(48, int(settings.planning_horizon_hours))
+        horizon_hours = max(1, min(int(hours) if hours is not None else default_hours, 72))
+
+        if from_timestamp is None:
+            start = datetime.now(timezone.utc)
+        elif from_timestamp.tzinfo is None:
+            start = from_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            start = from_timestamp.astimezone(timezone.utc)
+
+        start = start.replace(minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=horizon_hours)
+        actions = PlanRepository.get_plan_window(start, end)
+
     return [
         PlanActionOut(
             id=a.id,

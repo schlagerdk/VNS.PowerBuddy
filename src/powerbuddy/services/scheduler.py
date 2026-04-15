@@ -245,6 +245,48 @@ class PowerBuddyScheduler:
             soc = await self._resolve_start_soc_for_day(day)
             await self._plan_and_simulate(day, prices, soc)
 
+    async def midnight_replan_forward_horizon(self) -> None:
+        """
+        Force re-plan for the full forward horizon at local midnight.
+
+        Unlike interval refresh, this updates days even when plans already exist,
+        so the visible horizon stays fresh after date rollover.
+        """
+        now = datetime.now()
+        replanned_days: list[str] = []
+
+        for day in self._horizon_days_from_now():
+            prices = PriceRepository.get_by_day(day, settings.price_area)
+
+            if not self._should_fetch_day(day, now, prices):
+                continue
+
+            if not prices:
+                try:
+                    fetched = await self.price_provider.get_day_prices(day, settings.price_area)
+                except Exception as exc:
+                    logger.warning("Midnight replan failed to fetch prices for %s: %s", day, exc)
+                    continue
+                if fetched:
+                    PriceRepository.upsert_prices(fetched)
+                    prices = PriceRepository.get_by_day(day, settings.price_area)
+
+            if not prices:
+                continue
+
+            soc = await self._resolve_start_soc_for_day(day)
+            await self._plan_and_simulate(day, prices, soc)
+            replanned_days.append(day.isoformat())
+
+        if replanned_days:
+            logger.info(
+                "Midnight forward replan completed for %d day(s): %s",
+                len(replanned_days),
+                ", ".join(replanned_days),
+            )
+        else:
+            logger.info("Midnight forward replan completed with no replanned days")
+
     async def snapshot_power(self) -> None:
         data = await self.inverter_client.get_realtime()
         snapshot = PowerSnapshot(
@@ -571,6 +613,15 @@ class PowerBuddyScheduler:
             hour=0,
             minute=25,
             id="planner-kpi-autotune",
+        )
+
+        # Force a fresh forward-horizon plan after day rollover.
+        self.scheduler.add_job(
+            self.midnight_replan_forward_horizon,
+            "cron",
+            hour=0,
+            minute=5,
+            id="midnight-forward-replan",
         )
 
         # Apply active plan action to inverter.

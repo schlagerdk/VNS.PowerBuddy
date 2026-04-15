@@ -393,6 +393,20 @@ class PlanRepository:
             )
 
     @staticmethod
+    def get_plan_window(start: datetime, end: datetime) -> list[PlanAction]:
+        with SessionLocal() as session:
+            return list(
+                session.execute(
+                    select(PlanAction)
+                    .where(
+                        PlanAction.end_time > start,
+                        PlanAction.start_time < end,
+                    )
+                    .order_by(PlanAction.start_time.asc())
+                ).scalars()
+            )
+
+    @staticmethod
     def update_action(action_id: int, **kwargs) -> PlanAction | None:
         with SessionLocal() as session:
             action = session.get(PlanAction, action_id)
