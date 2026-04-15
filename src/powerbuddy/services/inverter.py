@@ -348,7 +348,7 @@ class FroniusClient(InverterClient):
 
             entries = [self._sanitize_tou_entry(e) for e in raw_entries if isinstance(e, dict)]
             # PowerBuddy manages charge/discharge limits explicitly.
-            allowed_types = {"CHARGE_MIN", "CHARGE_MAX", "DISCHARGE_MAX"}
+            allowed_types = {"CHARGE_MIN", "CHARGE_MAX", "DISCHARGE_MIN", "DISCHARGE_MAX"}
             compacted: list[dict] = []
             seen_types: set[str] = set()
             for entry in entries:
@@ -374,6 +374,13 @@ class FroniusClient(InverterClient):
                         "Active": False,
                         "Power": 0,
                         "ScheduleType": "CHARGE_MAX",
+                        "TimeTable": {"Start": "00:00", "End": "23:59"},
+                        "Weekdays": {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True},
+                    },
+                    {
+                        "Active": False,
+                        "Power": 0,
+                        "ScheduleType": "DISCHARGE_MIN",
                         "TimeTable": {"Start": "00:00", "End": "23:59"},
                         "Weekdays": {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True},
                     },
@@ -424,10 +431,17 @@ class FroniusClient(InverterClient):
                 target["Weekdays"] = {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True}
 
             if is_discharge:
-                schedule_type = "DISCHARGE_MAX"
+                schedule_type = "DISCHARGE_MIN"
                 power_w = max_discharge_w
                 slot_start = "00:00"
                 slot_end = "23:59"
+
+                discharge_max = next((e for e in entries if e.get("ScheduleType") == "DISCHARGE_MAX"), None)
+                if discharge_max is not None:
+                    discharge_max["Active"] = False
+                    discharge_max["Power"] = 0
+                    discharge_max["TimeTable"] = {"Start": slot_start, "End": slot_end}
+                    discharge_max["Weekdays"] = {"Mon": True, "Tue": True, "Wed": True, "Thu": True, "Fri": True, "Sat": True, "Sun": True}
 
                 target = None
                 for e in entries:
