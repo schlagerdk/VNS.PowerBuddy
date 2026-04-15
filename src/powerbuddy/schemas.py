@@ -48,7 +48,7 @@ class ManualOverrideIn(BaseModel):
     date: date
     start_time: datetime
     end_time: datetime
-    action: Literal["charge", "discharge", "hold"]
+    action: Literal["charge", "discharge", "hold", "auto", "discharge_force"]
     charge_power_w: float | None = Field(default=None, ge=0)
     target_soc: float | None = None
     reason: str = "manual override"
@@ -90,7 +90,7 @@ class TariffManualHoursIn(BaseModel):
 
 
 class PlanActionUpdateIn(BaseModel):
-    action: Literal["charge", "discharge", "hold"] | None = None
+    action: Literal["charge", "discharge", "hold", "auto", "discharge_force"] | None = None
     charge_power_w: float | None = Field(default=None, ge=0)
     target_soc: float | None = None
     reason: str | None = None
@@ -100,7 +100,7 @@ class PlanActionUpdateIn(BaseModel):
 class PlanActionIn(BaseModel):
     start_time: datetime
     end_time: datetime
-    action: Literal["charge", "discharge", "hold"]
+    action: Literal["charge", "discharge", "hold", "auto", "discharge_force"]
     charge_power_w: float | None = Field(default=None, ge=0)
     target_soc: float | None = None
     reason: str = "manual plan"

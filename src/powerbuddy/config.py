@@ -84,6 +84,22 @@ class Settings(BaseSettings):
         default=200.0,
         alias="POWERBUDDY_FORCE_LOAD_GRID_IMPORT_LIMIT_W",
     )
+    hold_high_solar_auto_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_HOLD_HIGH_SOLAR_AUTO_ENABLED",
+    )
+    hold_high_solar_auto_pv_w_threshold: float = Field(
+        default=2500.0,
+        alias="POWERBUDDY_HOLD_HIGH_SOLAR_AUTO_PV_W_THRESHOLD",
+    )
+    hold_high_solar_auto_soc_below_percent: float = Field(
+        default=100.0,
+        alias="POWERBUDDY_HOLD_HIGH_SOLAR_AUTO_SOC_BELOW_PERCENT",
+    )
+    force_discharge_power_w: int = Field(
+        default=6000,
+        alias="POWERBUDDY_FORCE_DISCHARGE_POWER_W",
+    )
 
     expected_daily_consumption_kwh: float = Field(
         default=60.0,

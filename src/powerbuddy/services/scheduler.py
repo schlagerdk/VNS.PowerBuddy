@@ -544,12 +544,39 @@ class PowerBuddyScheduler:
                 current_end = end
                 break
 
+        runtime_action = current_action
+        realtime_for_hold: object | None = None
+
+        # Keep existing planner behavior: planned "discharge" maps to inverter auto mode.
+        if runtime_action == "discharge":
+            runtime_action = "auto"
+
+        # If plan says hold but we have high PV and SOC isn't full, switch to auto mode
+        # so the inverter can absorb free solar energy instead of staying rigidly locked.
+        if runtime_action == "hold" and settings.hold_high_solar_auto_enabled:
+            try:
+                realtime_for_hold = await self.inverter_client.get_realtime()
+                pv_w = max(0.0, float(realtime_for_hold.pv_power_w))
+                soc = float(realtime_for_hold.battery_soc)
+                if (
+                    pv_w >= float(settings.hold_high_solar_auto_pv_w_threshold)
+                    and soc < float(settings.hold_high_solar_auto_soc_below_percent)
+                ):
+                    runtime_action = "auto"
+                    logger.info(
+                        "Hold overridden to auto due to high solar (pv=%.1fW, soc=%.1f%%)",
+                        pv_w,
+                        soc,
+                    )
+            except Exception:
+                pass
+
         power_signature = "" if current_charge_power_w is None else f"{current_charge_power_w:.1f}"
-        signature = (current_action, current_start.isoformat(), f"{current_end.isoformat()}|{power_signature}")
-        if current_action != "charge" and signature == self._last_executed_signature:
-            if current_action == "hold":
+        signature = (runtime_action, current_start.isoformat(), f"{current_end.isoformat()}|{power_signature}")
+        if runtime_action != "charge" and signature == self._last_executed_signature:
+            if runtime_action == "hold":
                 try:
-                    realtime = await self.inverter_client.get_realtime()
+                    realtime = realtime_for_hold or await self.inverter_client.get_realtime()
                     if abs(float(realtime.battery_power_w)) > float(settings.hold_reassert_threshold_w):
                         logger.info(
                             "Hold drift detected (battery_power_w=%.1fW), forcing immediate re-apply",
@@ -568,7 +595,7 @@ class PowerBuddyScheduler:
                 if self._last_executed_at and (datetime.now() - self._last_executed_at).total_seconds() < refresh_sec:
                     return
 
-        ok = await self.inverter_client.apply_action(current_action, charge_power_w=current_charge_power_w)
+        ok = await self.inverter_client.apply_action(runtime_action, charge_power_w=current_charge_power_w)
         if ok:
             self._last_executed_signature = signature
             self._last_executed_at = datetime.now()
