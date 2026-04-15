@@ -549,9 +549,9 @@ class PowerBuddyScheduler:
         runtime_action = current_action
         realtime_for_hold: object | None = None
 
-            # Backward compatibility: old non-manual plans may still contain "discharge".
-            # New planner uses "auto" instead.
-            if runtime_action == "discharge" and not current_is_manual_override:
+        # Backward compatibility: old non-manual plans may still contain "discharge".
+        # New planner uses "auto" instead.
+        if runtime_action == "discharge" and not current_is_manual_override:
             runtime_action = "auto"
 
         # If plan says hold but we have high PV and SOC isn't full, switch to auto mode
