@@ -320,7 +320,7 @@ class FroniusClient(InverterClient):
                 except Exception:
                     current_soc = int(settings.battery_min_soc)
                 soc_min = current_soc
-                soc_max = current_soc
+                soc_max = 100
 
             battery_cfg_result = await self._fronius_digest_request(
                 "POST",
