@@ -734,11 +734,14 @@ class PowerBuddyScheduler:
             try:
                 realtime_for_hold = await self.inverter_client.get_realtime()
                 pv_w = max(0.0, float(realtime_for_hold.pv_power_w))
+                load_w = max(0.0, float(realtime_for_hold.load_power_w))
                 grid_w = float(realtime_for_hold.grid_power_w)
                 soc = float(realtime_for_hold.battery_soc)
+                surplus_w = pv_w - load_w
                 if (
                     pv_w >= float(settings.hold_solar_capture_pv_w_threshold)
                     and grid_w <= float(settings.hold_solar_capture_export_w_threshold)
+                    and surplus_w >= float(settings.hold_override_min_surplus_w)
                     and soc < (float(settings.battery_max_soc) - 0.2)
                 ):
                     runtime_action = "charge"
@@ -746,29 +749,11 @@ class PowerBuddyScheduler:
                     effective_charge_kw = default_charge_kw if default_charge_kw > 0.0 else float(settings.planned_charge_kw)
                     current_charge_power_w = round(min(float(settings.max_charge_kw), effective_charge_kw) * 1000.0, 1)
                     logger.info(
-                        "Hold overridden to charge due to solar surplus (pv=%.1fW, grid=%.1fW, soc=%.1f%%)",
+                        "Hold overridden to charge due to solar surplus (pv=%.1fW, load=%.1fW, surplus=%.1fW, grid=%.1fW, soc=%.1f%%)",
                         pv_w,
+                        load_w,
+                        surplus_w,
                         grid_w,
-                        soc,
-                    )
-            except Exception:
-                pass
-
-        # If plan says hold but we have high PV and SOC isn't full, switch to auto mode
-        # so the inverter can absorb free solar energy instead of staying rigidly locked.
-        if runtime_action == "hold" and settings.hold_high_solar_auto_enabled:
-            try:
-                realtime_for_hold = realtime_for_hold or await self.inverter_client.get_realtime()
-                pv_w = max(0.0, float(realtime_for_hold.pv_power_w))
-                soc = float(realtime_for_hold.battery_soc)
-                if (
-                    pv_w >= float(settings.hold_high_solar_auto_pv_w_threshold)
-                    and soc < float(settings.hold_high_solar_auto_soc_below_percent)
-                ):
-                    runtime_action = "auto"
-                    logger.info(
-                        "Hold overridden to auto due to high solar (pv=%.1fW, soc=%.1f%%)",
-                        pv_w,
                         soc,
                     )
             except Exception:
@@ -798,10 +783,16 @@ class PowerBuddyScheduler:
             if runtime_action == "hold":
                 try:
                     realtime = realtime_for_hold or await self.inverter_client.get_realtime()
-                    if abs(float(realtime.battery_power_w)) > float(settings.hold_reassert_threshold_w):
+                    battery_power_w = float(realtime.battery_power_w)
+                    if battery_power_w > float(settings.hold_discharge_reassert_threshold_w):
+                        logger.info(
+                            "Hold discharge drift detected (battery_power_w=%.1fW), forcing immediate re-apply",
+                            battery_power_w,
+                        )
+                    elif abs(battery_power_w) > float(settings.hold_reassert_threshold_w):
                         logger.info(
                             "Hold drift detected (battery_power_w=%.1fW), forcing immediate re-apply",
-                            float(realtime.battery_power_w),
+                            battery_power_w,
                         )
                     else:
                         refresh_sec = max(60, int(settings.execution_non_charge_refresh_seconds))

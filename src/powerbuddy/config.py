@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         default=120.0,
         alias="POWERBUDDY_HOLD_REASSERT_THRESHOLD_W",
     )
+    hold_discharge_reassert_threshold_w: float = Field(
+        default=5.0,
+        alias="POWERBUDDY_HOLD_DISCHARGE_REASSERT_THRESHOLD_W",
+    )
 
     # Fronius control endpoints (optional). If unset, execution logs warnings and skips writes.
     fronius_action_method: str = Field(default="POST", alias="POWERBUDDY_FRONIUS_ACTION_METHOD")
@@ -70,8 +74,12 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_PV_W_THRESHOLD",
     )
     hold_solar_capture_export_w_threshold: float = Field(
-        default=-500.0,
+        default=-800.0,
         alias="POWERBUDDY_HOLD_SOLAR_CAPTURE_EXPORT_W_THRESHOLD",
+    )
+    hold_override_min_surplus_w: float = Field(
+        default=400.0,
+        alias="POWERBUDDY_HOLD_OVERRIDE_MIN_SURPLUS_W",
     )
     force_load_solar_aware_enabled: bool = Field(
         default=True,
@@ -86,7 +94,7 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_FORCE_LOAD_GRID_IMPORT_LIMIT_W",
     )
     hold_high_solar_auto_enabled: bool = Field(
-        default=True,
+        default=False,
         alias="POWERBUDDY_HOLD_HIGH_SOLAR_AUTO_ENABLED",
     )
     hold_high_solar_auto_pv_w_threshold: float = Field(
