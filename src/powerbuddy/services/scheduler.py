@@ -179,6 +179,66 @@ class PowerBuddyScheduler:
         )
         SimulationRepository.replace_points(day_key, simulation)
 
+    @staticmethod
+    def _naive_ts(ts: datetime) -> datetime:
+        return ts.replace(tzinfo=None) if ts.tzinfo else ts
+
+    def _convert_active_charge_block_to_hold(self, day_key: str, now_local: datetime) -> int:
+        """
+        Convert the active charge hour and directly following contiguous charge hours
+        into hold actions for the same day.
+        """
+        actions = PlanRepository.get_plan(day_key)
+        if not actions:
+            return 0
+
+        active_index: int | None = None
+        for idx, action in enumerate(actions):
+            start = self._naive_ts(action.start_time)
+            end = self._naive_ts(action.end_time)
+            if start <= now_local < end:
+                active_index = idx
+                break
+
+        if active_index is None:
+            return 0
+        if actions[active_index].action != "charge":
+            return 0
+
+        converted = 0
+        current_slot = self._naive_ts(actions[active_index].start_time).replace(minute=0, second=0, microsecond=0)
+
+        while True:
+            slot_end = current_slot + timedelta(hours=1)
+            slot_actions = [
+                a for a in actions
+                if current_slot <= self._naive_ts(a.start_time) < slot_end
+            ]
+            if not slot_actions:
+                break
+
+            # Actions are already sorted with manual overrides first. Mirror API-effective action per hour.
+            effective_action = slot_actions[0].action
+            if effective_action != "charge":
+                break
+
+            for action in slot_actions:
+                if action.action != "charge":
+                    continue
+                updated = PlanRepository.update_action(
+                    action.id,
+                    action="hold",
+                    charge_power_w=None,
+                    target_soc=None,
+                    reason="battery full: converted charge block to hold",
+                )
+                if updated is not None:
+                    converted += 1
+
+            current_slot = slot_end
+
+        return converted
+
     def _window_expected_consumption_kwh(self, start: datetime, end: datetime) -> float:
         if end <= start:
             return 0.0
@@ -639,6 +699,30 @@ class PowerBuddyScheduler:
         runtime_action = current_action
         realtime_for_hold: object | None = None
 
+        # If battery is already full, active charge and contiguous following charge
+        # actions are pointless; normalize the block to hold immediately.
+        if runtime_action == "charge":
+            try:
+                realtime_charge = await self.inverter_client.get_realtime()
+                soc = float(realtime_charge.battery_soc)
+                battery_power_w = float(realtime_charge.battery_power_w)
+                max_soc = float(settings.battery_max_soc)
+                at_max_soc = soc >= (max_soc - 0.2)
+                near_full_and_not_charging = (soc >= (max_soc - 1.0)) and (battery_power_w > -50.0)
+                if at_max_soc or near_full_and_not_charging:
+                    converted = self._convert_active_charge_block_to_hold(day_key, now_local)
+                    runtime_action = "hold"
+                    current_charge_power_w = None
+                    if converted > 0:
+                        logger.info(
+                            "Battery saturated/near-full (soc=%.1f%%, battery_power=%.1fW): converted %d charge action(s) to hold",
+                            soc,
+                            battery_power_w,
+                            converted,
+                        )
+            except Exception:
+                pass
+
         # Backward compatibility: old non-manual plans may still contain "discharge".
         # New planner uses "auto" instead.
         if runtime_action == "discharge" and not current_is_manual_override:
@@ -655,7 +739,7 @@ class PowerBuddyScheduler:
                 if (
                     pv_w >= float(settings.hold_solar_capture_pv_w_threshold)
                     and grid_w <= float(settings.hold_solar_capture_export_w_threshold)
-                    and soc < float(settings.battery_max_soc)
+                    and soc < (float(settings.battery_max_soc) - 0.2)
                 ):
                     runtime_action = "charge"
                     default_charge_kw = max(0.0, float(settings.default_charge_power_w) / 1000.0)
