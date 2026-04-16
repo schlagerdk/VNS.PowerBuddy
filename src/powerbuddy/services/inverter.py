@@ -58,12 +58,17 @@ class FroniusClient(InverterClient):
             first_inverter = next(iter(inverters.values()))
             battery_soc = float(first_inverter.get("SOC", 0.0) or 0.0)
 
+        grid_power = float(site.get("P_Grid", 0.0) or 0.0)
+        load_power = abs(float(site.get("P_Load", 0.0) or 0.0))
+        pv_power = max(0.0, float(site.get("P_PV", 0.0) or 0.0))
+        battery_power = float(site.get("P_Akku", 0.0) or 0.0)
+
         return RealtimePowerData(
             timestamp=datetime.now(timezone.utc),
-            grid_power_w=float(site.get("P_Grid", 0.0) or 0.0),
-            load_power_w=float(site.get("P_Load", 0.0) or 0.0),
-            pv_power_w=float(site.get("P_PV", 0.0) or 0.0),
-            battery_power_w=float(site.get("P_Akku", 0.0) or 0.0),
+            grid_power_w=grid_power,
+            load_power_w=load_power,
+            pv_power_w=pv_power,
+            battery_power_w=battery_power,
             battery_soc=battery_soc,
         )
 

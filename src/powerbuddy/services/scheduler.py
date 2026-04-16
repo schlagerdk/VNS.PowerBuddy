@@ -26,6 +26,7 @@ class PowerBuddyScheduler:
         self.price_provider = get_price_provider()
         self.inverter_client = get_inverter_client()
         self.planner = DayPlanner()
+        self._execution_enabled = bool(settings.execution_enabled)
         self._last_solar_replan_at: datetime | None = None
         self._last_intraday_replan_at: datetime | None = None
         self._last_executed_signature: tuple[str, str, str] | None = None
@@ -79,6 +80,29 @@ class PowerBuddyScheduler:
 
         return live_soc
 
+    def is_execution_enabled(self) -> bool:
+        return bool(self._execution_enabled)
+
+    def execution_mode(self) -> str:
+        return "active" if self._execution_enabled else "paused"
+
+    async def pause_execution(self) -> bool:
+        """Pause inverter dispatch only and immediately relax control to auto mode."""
+        self._execution_enabled = False
+        self._last_executed_signature = None
+        self._last_executed_at = None
+        try:
+            return await self.inverter_client.apply_action("auto", charge_power_w=None)
+        except Exception:
+            return False
+
+    async def start_execution(self) -> None:
+        """Resume inverter dispatch and immediately apply the currently active plan action."""
+        self._execution_enabled = True
+        self._last_executed_signature = None
+        self._last_executed_at = None
+        await self.execute_current_plan_action()
+
     async def _plan_and_simulate(self, day: date, prices: list[PricePoint], soc: float, lock_hours: int = 0) -> None:
         tz = ZoneInfo(settings.timezone)
         now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
@@ -91,10 +115,18 @@ class PowerBuddyScheduler:
         tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
         weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
         day_key = day.isoformat()
+        existing = PlanRepository.get_plan(day_key)
+        manual_overrides = [action for action in existing if action.is_manual_override]
+
+        def _overlaps(a: PlanAction, b: PlanAction) -> bool:
+            a_start = a.start_time.replace(tzinfo=None) if a.start_time.tzinfo else a.start_time
+            a_end = a.end_time.replace(tzinfo=None) if a.end_time.tzinfo else a.end_time
+            b_start = b.start_time.replace(tzinfo=None) if b.start_time.tzinfo else b.start_time
+            b_end = b.end_time.replace(tzinfo=None) if b.end_time.tzinfo else b.end_time
+            return a_start < b_end and a_end > b_start
 
         frozen_actions: list[PlanAction] = []
         if planning_start is not None:
-            existing = PlanRepository.get_plan(day_key)
             for action in existing:
                 if action.is_manual_override:
                     continue
@@ -124,6 +156,12 @@ class PowerBuddyScheduler:
                 pv_weather_factor_24h=weather_factors,
             )
         )
+        if manual_overrides:
+            actions_future = [
+                action
+                for action in actions_future
+                if not any(_overlaps(action, manual_action) for manual_action in manual_overrides)
+            ]
         actions = frozen_actions + actions_future
         PlanRepository.replace_plan(day_key, actions)
         actions_for_simulation = PlanRepository.get_plan(day_key)
@@ -201,10 +239,11 @@ class PowerBuddyScheduler:
 
     async def refresh_prices_and_replan(self) -> None:
         """
-        Fetch prices for forward horizon and only generate plans for days
-        that do not already have a plan.
+        Fetch prices for forward horizon and re-plan only when new/changed
+        price data arrives for a day.
 
-        Existing plans are never auto-overwritten during the day.
+        Once a plan is generated for a given set of prices, it remains locked
+        until prices for that day change.
         """
         now = datetime.now()
         days_to_fetch = self._horizon_days_from_now()
@@ -220,17 +259,38 @@ class PowerBuddyScheduler:
                 )
                 continue
 
+            existing_price_map = {
+                (
+                    p.timestamp.replace(tzinfo=None) if p.timestamp.tzinfo else p.timestamp,
+                    p.area,
+                ): round(float(p.price_ore_per_kwh), 6)
+                for p in existing_prices
+            }
+
             try:
-                new_prices = await self.price_provider.get_day_prices(day, settings.price_area)
+                fetched_prices = await self.price_provider.get_day_prices(day, settings.price_area)
             except Exception as exc:
                 logger.warning("Price fetch failed for %s: %s", day, exc)
                 continue
 
-            if not new_prices:
+            if not fetched_prices:
                 logger.debug("No prices returned for %s (may not be published yet)", day)
                 continue
 
-            PriceRepository.upsert_prices(new_prices)
+            fetched_price_map = {
+                (
+                    p.timestamp.replace(tzinfo=None) if p.timestamp.tzinfo else p.timestamp,
+                    p.area,
+                ): round(float(p.price_ore_per_kwh), 6)
+                for p in fetched_prices
+            }
+            prices_changed = fetched_price_map != existing_price_map
+
+            if not prices_changed:
+                logger.debug("Prices unchanged for %s — plan remains locked", day)
+                continue
+
+            PriceRepository.upsert_prices(fetched_prices)
             prices = PriceRepository.get_by_day(day, settings.price_area)
             if not prices:
                 continue
@@ -238,10 +298,9 @@ class PowerBuddyScheduler:
             day_key = day.isoformat()
             existing_plan = PlanRepository.get_plan(day_key)
             if existing_plan:
-                logger.debug("Plan already exists for %s — auto re-plan disabled", day)
-                continue
+                logger.info("Prices changed for %s — regenerating locked plan for new price set", day)
 
-            logger.info("No existing plan for %s — generating daily plan", day)
+            logger.info("Generating daily plan for %s", day)
             soc = await self._resolve_start_soc_for_day(day)
             await self._plan_and_simulate(day, prices, soc)
 
@@ -253,6 +312,7 @@ class PowerBuddyScheduler:
         so the visible horizon stays fresh after date rollover.
         """
         now = datetime.now()
+        today = now.date()
         replanned_days: list[str] = []
 
         for day in self._horizon_days_from_now():
@@ -275,7 +335,10 @@ class PowerBuddyScheduler:
                 continue
 
             soc = await self._resolve_start_soc_for_day(day)
-            await self._plan_and_simulate(day, prices, soc)
+            lock_hours = 0
+            if day == today:
+                lock_hours = max(0, int(settings.midnight_replan_lock_hours))
+            await self._plan_and_simulate(day, prices, soc, lock_hours=lock_hours)
             replanned_days.append(day.isoformat())
 
         if replanned_days:
@@ -367,6 +430,34 @@ class PowerBuddyScheduler:
 
         now = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
         lock_hours = max(0, int(settings.intraday_replan_lock_hours))
+        live_soc = await self._fetch_soc()
+        low_soc_threshold = float(settings.battery_min_soc) + float(settings.low_soc_force_charge_margin_percent)
+        force_low_soc_replan = bool(settings.low_soc_force_charge_enabled) and (live_soc <= low_soc_threshold)
+
+        if force_low_soc_replan:
+            day = now.date()
+            prices = PriceRepository.get_by_day(day, settings.price_area)
+            if not prices:
+                try:
+                    fetched = await self.price_provider.get_day_prices(day, settings.price_area)
+                    if fetched:
+                        PriceRepository.upsert_prices(fetched)
+                        prices = PriceRepository.get_by_day(day, settings.price_area)
+                except Exception as exc:
+                    logger.warning("Low-SOC replan price fetch failed for %s: %s", day, exc)
+                    return
+            if not prices:
+                return
+
+            await self._plan_and_simulate(day, prices, live_soc, lock_hours=lock_hours)
+            self._last_intraday_replan_at = datetime.now()
+            logger.warning(
+                "Low-SOC guarded replan executed (soc=%.1f%% threshold=%.1f%%)",
+                live_soc,
+                low_soc_threshold,
+            )
+            return
+
         lookback_hours = max(1, lock_hours)
         start = now - timedelta(hours=lookback_hours)
 
@@ -397,8 +488,7 @@ class PowerBuddyScheduler:
         if not prices:
             return
 
-        soc = await self._fetch_soc()
-        await self._plan_and_simulate(day, prices, soc, lock_hours=lock_hours)
+        await self._plan_and_simulate(day, prices, live_soc, lock_hours=lock_hours)
         self._last_intraday_replan_at = datetime.now()
         logger.info(
             "Intraday guarded replan executed (actual=%.2f kWh expected=%.2f kWh deviation=%.1f%%)",
@@ -523,7 +613,7 @@ class PowerBuddyScheduler:
         """
         Execution layer: applies the currently active plan action to inverter.
         """
-        if not settings.execution_enabled:
+        if not self._execution_enabled:
             return
 
         now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
@@ -554,11 +644,37 @@ class PowerBuddyScheduler:
         if runtime_action == "discharge" and not current_is_manual_override:
             runtime_action = "auto"
 
+        # If plan says hold but there is clear PV surplus export and battery is not full,
+        # force charge to capture excess solar instead of curtailing/exporting.
+        if runtime_action == "hold" and settings.hold_solar_capture_enabled:
+            try:
+                realtime_for_hold = await self.inverter_client.get_realtime()
+                pv_w = max(0.0, float(realtime_for_hold.pv_power_w))
+                grid_w = float(realtime_for_hold.grid_power_w)
+                soc = float(realtime_for_hold.battery_soc)
+                if (
+                    pv_w >= float(settings.hold_solar_capture_pv_w_threshold)
+                    and grid_w <= float(settings.hold_solar_capture_export_w_threshold)
+                    and soc < float(settings.battery_max_soc)
+                ):
+                    runtime_action = "charge"
+                    default_charge_kw = max(0.0, float(settings.default_charge_power_w) / 1000.0)
+                    effective_charge_kw = default_charge_kw if default_charge_kw > 0.0 else float(settings.planned_charge_kw)
+                    current_charge_power_w = round(min(float(settings.max_charge_kw), effective_charge_kw) * 1000.0, 1)
+                    logger.info(
+                        "Hold overridden to charge due to solar surplus (pv=%.1fW, grid=%.1fW, soc=%.1f%%)",
+                        pv_w,
+                        grid_w,
+                        soc,
+                    )
+            except Exception:
+                pass
+
         # If plan says hold but we have high PV and SOC isn't full, switch to auto mode
         # so the inverter can absorb free solar energy instead of staying rigidly locked.
         if runtime_action == "hold" and settings.hold_high_solar_auto_enabled:
             try:
-                realtime_for_hold = await self.inverter_client.get_realtime()
+                realtime_for_hold = realtime_for_hold or await self.inverter_client.get_realtime()
                 pv_w = max(0.0, float(realtime_for_hold.pv_power_w))
                 soc = float(realtime_for_hold.battery_soc)
                 if (
@@ -570,6 +686,24 @@ class PowerBuddyScheduler:
                         "Hold overridden to auto due to high solar (pv=%.1fW, soc=%.1f%%)",
                         pv_w,
                         soc,
+                    )
+            except Exception:
+                pass
+
+        # Emergency guard: when SOC is too close to minimum, do not keep holding.
+        if runtime_action == "hold" and settings.low_soc_force_charge_enabled:
+            try:
+                realtime_low_soc = realtime_for_hold or await self.inverter_client.get_realtime()
+                low_soc_threshold = float(settings.battery_min_soc) + float(settings.low_soc_force_charge_margin_percent)
+                if float(realtime_low_soc.battery_soc) <= low_soc_threshold:
+                    runtime_action = "charge"
+                    default_charge_kw = max(0.0, float(settings.default_charge_power_w) / 1000.0)
+                    effective_charge_kw = default_charge_kw if default_charge_kw > 0.0 else float(settings.planned_charge_kw)
+                    current_charge_power_w = round(min(float(settings.max_charge_kw), effective_charge_kw) * 1000.0, 1)
+                    logger.warning(
+                        "Hold overridden to charge due to low SOC (soc=%.1f%% threshold=%.1f%%)",
+                        float(realtime_low_soc.battery_soc),
+                        low_soc_threshold,
                     )
             except Exception:
                 pass
@@ -625,16 +759,24 @@ class PowerBuddyScheduler:
             id="price-refresh-replan",
         )
 
+        # Deterministic day-ahead safety net around publication window.
+        self.scheduler.add_job(
+            self.refresh_prices_and_replan,
+            "cron",
+            hour=14,
+            minute=5,
+            id="day-ahead-refresh-1405",
+        )
+        self.scheduler.add_job(
+            self.refresh_prices_and_replan,
+            "cron",
+            hour=14,
+            minute=20,
+            id="day-ahead-refresh-1420",
+        )
+
         # Power snapshot every 5 minutes
         self.scheduler.add_job(self.snapshot_power, "interval", minutes=5, id="power-snapshot")
-
-        # Guarded intraday replan using recent deviation from expected load.
-        self.scheduler.add_job(
-            self.intraday_guarded_replan,
-            "interval",
-            minutes=max(5, int(settings.intraday_replan_interval_minutes)),
-            id="intraday-guarded-replan",
-        )
 
         # KPI and auto-tuning once per day.
         self.scheduler.add_job(
@@ -643,15 +785,6 @@ class PowerBuddyScheduler:
             hour=0,
             minute=25,
             id="planner-kpi-autotune",
-        )
-
-        # Force a fresh forward-horizon plan after day rollover.
-        self.scheduler.add_job(
-            self.midnight_replan_forward_horizon,
-            "cron",
-            hour=0,
-            minute=5,
-            id="midnight-forward-replan",
         )
 
         # Apply active plan action to inverter.
@@ -670,7 +803,6 @@ class PowerBuddyScheduler:
         import asyncio
         loop = asyncio.get_event_loop()
         loop.create_task(self.refresh_prices_and_replan())
-        loop.create_task(self.intraday_guarded_replan())
         loop.create_task(self.update_planner_kpis_and_autotune())
         loop.create_task(self.execute_current_plan_action())
 

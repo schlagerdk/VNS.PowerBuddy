@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, desc, func, select
 
 from powerbuddy.database import SessionLocal
 from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot, PricePoint, SimulationPoint
@@ -118,7 +118,7 @@ class PowerRepository:
 
             # Cap large gaps to avoid overweighting sparse data.
             delta_hours = min(delta_hours, 0.25)
-            total_kwh += (current.load_power_w / 1000.0) * delta_hours
+            total_kwh += (abs(float(current.load_power_w)) / 1000.0) * delta_hours
 
         return round(total_kwh, 3), len(snapshots)
 
@@ -183,7 +183,7 @@ class PowerRepository:
                     delta_hours = 5.0 / 60.0
 
                 delta_hours = min(delta_hours, 0.25)
-                load_kwh = max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+                load_kwh = abs(float(current.load_power_w) / 1000.0) * delta_hours
                 hour = int(current.timestamp.hour)
                 hourly_kwh[hour] += load_kwh
                 total_kwh += load_kwh
@@ -252,7 +252,7 @@ class PowerRepository:
                 else:
                     delta_hours = 5.0 / 60.0
                 delta_hours = min(delta_hours, 0.25)
-                load_kwh = max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+                load_kwh = abs(float(current.load_power_w) / 1000.0) * delta_hours
                 hourly_kwh[int(current.timestamp.hour)] += load_kwh
                 total_kwh += load_kwh
 
@@ -349,7 +349,7 @@ class PowerRepository:
             else:
                 delta_hours = 5.0 / 60.0
             delta_hours = min(delta_hours, 0.25)
-            total_kwh += max(0.0, float(current.load_power_w) / 1000.0) * delta_hours
+            total_kwh += abs(float(current.load_power_w) / 1000.0) * delta_hours
 
         return round(total_kwh, 3), len(snapshots)
 
@@ -388,7 +388,11 @@ class PlanRepository:
                 session.execute(
                     select(PlanAction)
                     .where(PlanAction.date_key == day_key)
-                    .order_by(PlanAction.start_time.asc())
+                    .order_by(
+                        PlanAction.start_time.asc(),
+                        desc(PlanAction.is_manual_override),
+                        PlanAction.id.desc(),
+                    )
                 ).scalars()
             )
 
@@ -402,7 +406,11 @@ class PlanRepository:
                         PlanAction.end_time > start,
                         PlanAction.start_time < end,
                     )
-                    .order_by(PlanAction.start_time.asc())
+                    .order_by(
+                        PlanAction.start_time.asc(),
+                        desc(PlanAction.is_manual_override),
+                        PlanAction.id.desc(),
+                    )
                 ).scalars()
             )
 

@@ -140,7 +140,6 @@ Selected endpoints:
 - `PUT /tariff/manual-hours`
 - `DELETE /tariff/manual-hours`
 - `GET /inverter/realtime`
-- `POST /planning/generate?target_date=YYYY-MM-DD`
 - `GET /planning?target_date=YYYY-MM-DD`
 - `PUT /planning`
 - `PUT /planning/action/{action_id}`
@@ -149,6 +148,9 @@ Selected endpoints:
 - `POST /planning/simulate?target_date=YYYY-MM-DD`
 - `GET /planning/now`
 - `GET /planning/chart-data?target_date=YYYY-MM-DD`
+- `GET /execution/status`
+- `POST /execution/pause`
+- `POST /execution/start`
 
 ## Runtime Configuration
 
@@ -162,8 +164,8 @@ Scheduler behavior:
 - Price refresh cadence is controlled by `POWERBUDDY_PRICE_RECHECK_INTERVAL_MINUTES`.
 - Day-ahead fetch timing is controlled by `POWERBUDDY_DAY_AHEAD_PUBLISH_HOUR_LOCAL`.
 - Planning horizon is controlled by `POWERBUDDY_PLANNING_HORIZON_HOURS` (minimum effective horizon is 48 hours).
-- Automatic planning is only generated for days without an existing plan.
-- Existing plans are not auto-overwritten by the scheduler.
+- Automatic planning is regenerated only when fetched prices for a day actually change.
+- After prices are fetched and unchanged, plans stay locked unless edited manually.
 
 ## Consumption Model
 

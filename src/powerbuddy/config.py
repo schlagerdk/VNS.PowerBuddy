@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Expected practical charging power used for planning/execution (often below inverter max).
     planned_charge_kw: float = Field(default=3.5, alias="POWERBUDDY_PLANNED_CHARGE_KW")
     max_charge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_CHARGE_KW")
+    default_charge_power_w: int = Field(default=6000, alias="POWERBUDDY_DEFAULT_CHARGE_POWER_W")
     max_discharge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_DISCHARGE_KW")
     hold_charge_power_w: float = Field(default=5.0, alias="POWERBUDDY_HOLD_CHARGE_POWER_W")
     hold_solar_capture_enabled: bool = Field(
@@ -219,10 +220,129 @@ class Settings(BaseSettings):
 
     intraday_replan_enabled: bool = Field(default=True, alias="POWERBUDDY_INTRADAY_REPLAN_ENABLED")
     intraday_replan_interval_minutes: int = Field(default=30, alias="POWERBUDDY_INTRADAY_REPLAN_INTERVAL_MINUTES")
-    intraday_replan_lock_hours: int = Field(default=2, alias="POWERBUDDY_INTRADAY_REPLAN_LOCK_HOURS")
+    intraday_replan_lock_hours: int = Field(default=6, alias="POWERBUDDY_INTRADAY_REPLAN_LOCK_HOURS")
     intraday_replan_consumption_deviation_trigger_ratio: float = Field(
         default=0.22,
         alias="POWERBUDDY_INTRADAY_REPLAN_CONSUMPTION_DEVIATION_TRIGGER_RATIO",
+    )
+
+    # Keep early-night decisions stable across date rollover.
+    midnight_replan_lock_hours: int = Field(default=6, alias="POWERBUDDY_MIDNIGHT_REPLAN_LOCK_HOURS")
+
+    # Hard planning guardrail: ensure battery reaches a minimum SOC before morning.
+    must_charge_window_enabled: bool = Field(default=True, alias="POWERBUDDY_MUST_CHARGE_WINDOW_ENABLED")
+    must_charge_window_start_hour_local: int = Field(
+        default=0,
+        alias="POWERBUDDY_MUST_CHARGE_WINDOW_START_HOUR_LOCAL",
+    )
+    must_charge_window_end_hour_local: int = Field(
+        default=6,
+        alias="POWERBUDDY_MUST_CHARGE_WINDOW_END_HOUR_LOCAL",
+    )
+    must_charge_window_min_soc_percent: float = Field(
+        default=55.0,
+        alias="POWERBUDDY_MUST_CHARGE_WINDOW_MIN_SOC_PERCENT",
+    )
+
+    # Prevent unusable plan states near battery minimum by forcing charging.
+    low_soc_force_charge_enabled: bool = Field(default=True, alias="POWERBUDDY_LOW_SOC_FORCE_CHARGE_ENABLED")
+    low_soc_force_charge_margin_percent: float = Field(
+        default=3.0,
+        alias="POWERBUDDY_LOW_SOC_FORCE_CHARGE_MARGIN_PERCENT",
+    )
+    low_soc_force_planning_near_now_hours: int = Field(
+        default=2,
+        alias="POWERBUDDY_LOW_SOC_FORCE_PLANNING_NEAR_NOW_HOURS",
+    )
+
+    # Strategy guardrail: use auto/discharge primarily in expensive hours.
+    auto_only_expensive_hours_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_AUTO_ONLY_EXPENSIVE_HOURS_ENABLED",
+    )
+    auto_only_expensive_quantile: float = Field(
+        default=0.70,
+        alias="POWERBUDDY_AUTO_ONLY_EXPENSIVE_QUANTILE",
+    )
+    auto_only_expensive_min_spread_ore: float = Field(
+        default=20.0,
+        alias="POWERBUDDY_AUTO_ONLY_EXPENSIVE_MIN_SPREAD_ORE",
+    )
+
+    # If spread is meaningful, precharge before reserve window instead of staying idle.
+    reserve_precharge_enforce_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_RESERVE_PRECHARGE_ENFORCE_ENABLED",
+    )
+    reserve_precharge_min_spread_ore: float = Field(
+        default=15.0,
+        alias="POWERBUDDY_RESERVE_PRECHARGE_MIN_SPREAD_ORE",
+    )
+    reserve_precharge_hours: int = Field(
+        default=8,
+        alias="POWERBUDDY_RESERVE_PRECHARGE_HOURS",
+    )
+    reserve_precharge_penalty_per_soc_ore: float = Field(
+        default=350.0,
+        alias="POWERBUDDY_RESERVE_PRECHARGE_PENALTY_PER_SOC_ORE",
+    )
+
+    # Aggressive cheap-slot capture to avoid missing low-price hours.
+    cheap_slot_capture_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_CHEAP_SLOT_CAPTURE_ENABLED",
+    )
+    cheap_slot_quantile: float = Field(
+        default=0.35,
+        alias="POWERBUDDY_CHEAP_SLOT_QUANTILE",
+    )
+    cheap_slot_min_spread_ore: float = Field(
+        default=18.0,
+        alias="POWERBUDDY_CHEAP_SLOT_MIN_SPREAD_ORE",
+    )
+    cheap_slot_miss_penalty_ore: float = Field(
+        default=500.0,
+        alias="POWERBUDDY_CHEAP_SLOT_MISS_PENALTY_ORE",
+    )
+    cheap_slot_equal_price_tolerance_ore: float = Field(
+        default=1.0,
+        alias="POWERBUDDY_CHEAP_SLOT_EQUAL_PRICE_TOLERANCE_ORE",
+    )
+    cheap_slot_min_target_soc_percent: float = Field(
+        default=80.0,
+        alias="POWERBUDDY_CHEAP_SLOT_MIN_TARGET_SOC_PERCENT",
+    )
+    reserve_hour_charge_penalty_ore: float = Field(
+        default=900.0,
+        alias="POWERBUDDY_RESERVE_HOUR_CHARGE_PENALTY_ORE",
+    )
+
+    # Ensure sufficient SOC before expensive windows so discharge can cover costly hours.
+    expensive_window_precharge_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_EXPENSIVE_WINDOW_PRECHARGE_ENABLED",
+    )
+    expensive_window_coverage_ratio: float = Field(
+        default=1.0,
+        alias="POWERBUDDY_EXPENSIVE_WINDOW_COVERAGE_RATIO",
+    )
+    expensive_window_min_span_hours: int = Field(
+        default=2,
+        alias="POWERBUDDY_EXPENSIVE_WINDOW_MIN_SPAN_HOURS",
+    )
+
+    # Extend auto/discharge blocks into nearby expensive shoulder hours.
+    auto_block_extension_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_AUTO_BLOCK_EXTENSION_ENABLED",
+    )
+    auto_block_extension_drop_limit_ore: float = Field(
+        default=30.0,
+        alias="POWERBUDDY_AUTO_BLOCK_EXTENSION_DROP_LIMIT_ORE",
+    )
+    auto_block_extension_floor_above_cheap_ore: float = Field(
+        default=0.0,
+        alias="POWERBUDDY_AUTO_BLOCK_EXTENSION_FLOOR_ABOVE_CHEAP_ORE",
     )
 
     kpi_tracking_enabled: bool = Field(default=True, alias="POWERBUDDY_KPI_TRACKING_ENABLED")
@@ -253,6 +373,28 @@ class Settings(BaseSettings):
     tariff_vat_factor: float = Field(
         default=1.25,
         alias="POWERBUDDY_TARIFF_VAT_FACTOR",
+    )
+
+    # Strict data policy: do not synthesize tomorrow prices/plans before real day-ahead data exists.
+    allow_provisional_prices: bool = Field(
+        default=False,
+        alias="POWERBUDDY_ALLOW_PROVISIONAL_PRICES",
+    )
+    allow_provisional_plans: bool = Field(
+        default=False,
+        alias="POWERBUDDY_ALLOW_PROVISIONAL_PLANS",
+    )
+
+    # Retail price-model calibration (excl. VAT):
+    # - supplier markup added on top of spot ("without transport/afgifter" in UI)
+    # - transport fixed component added with network tariff for "with transport/afgifter"
+    price_supplier_markup_ore: float = Field(
+        default=12.0,
+        alias="POWERBUDDY_PRICE_SUPPLIER_MARKUP_ORE",
+    )
+    price_transport_fixed_ore: float = Field(
+        default=12.0,
+        alias="POWERBUDDY_PRICE_TRANSPORT_FIXED_ORE",
     )
 
     # CORS: comma-separated origins allowed to call API from browser.

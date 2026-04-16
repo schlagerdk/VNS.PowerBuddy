@@ -7,7 +7,14 @@ from pydantic import BaseModel, Field
 class PriceOut(BaseModel):
     timestamp: datetime
     area: str
+    # Backward compatible primary price field (end-user price incl. transport/fees).
     price_ore_per_kwh: float
+    # Spot price only (no supplier markup, no transport, no VAT uplift).
+    spot_price_ore_per_kwh: float | None = None
+    # Retail energy price (spot + supplier markup), VAT included, excluding transport component.
+    price_without_fees_ore_per_kwh: float | None = None
+    # Retail total price including transport/network component and VAT.
+    price_with_fees_ore_per_kwh: float | None = None
     currency: str
 
 
