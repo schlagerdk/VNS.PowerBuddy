@@ -6,6 +6,10 @@
 
 VNS.PowerBuddy is a backend service for smart battery and energy planning.
 
+GitHub About (short description):
+
+`Smart home battery optimizer with day-ahead planning, spot-price aware scheduling, and real-time inverter control.`
+
 
 Core capabilities:
 

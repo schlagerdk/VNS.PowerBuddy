@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vns-powerbuddy"
 version = "1.0.1"
-description = "Smart battery and energy planning service"
+description = "FastAPI service for smart battery control, spot-price optimization, and day-ahead energy planning"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
