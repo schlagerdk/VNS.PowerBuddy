@@ -29,6 +29,8 @@ from powerbuddy.schemas import (
 )
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
+from powerbuddy.services.planning_sanity import apply_planning_sanity
+from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import get_price_provider
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
@@ -57,7 +59,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.0",
+    version="1.0.1",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -426,6 +428,31 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
         for action in generated:
             if not action.reason.startswith("provisional fallback:"):
                 action.reason = f"provisional fallback: {action.reason}"
+
+    generated, sanity_report = apply_planning_sanity(
+        planner=planner,
+        day=day,
+        actions=generated,
+        prices=prices,
+        start_soc=start_soc,
+        tariff_ore_per_hour=tariff_24h,
+        pv_weather_factor_24h=weather_factors,
+        auto_fix=bool(settings.planning_sanity_autofix_enabled),
+    )
+    if bool(sanity_report.get("auto_fix_applied")):
+        generated = sorted(generated, key=lambda action: action.start_time)
+
+    generated, variant_report = choose_best_plan_variant(
+        planner=planner,
+        day=day,
+        actions=generated,
+        prices=prices,
+        start_soc=start_soc,
+        tariff_ore_per_hour=tariff_24h,
+        pv_weather_factor_24h=weather_factors,
+    )
+    if variant_report.get("best_changes"):
+        generated = sorted(generated, key=lambda action: action.start_time)
 
     PlanRepository.replace_plan(day_key, generated)
 
@@ -815,7 +842,8 @@ async def get_prices(
             PriceOut(
                 timestamp=p.timestamp,
                 area=p.area,
-                price_ore_per_kwh=with_fees,
+                # Keep primary field aligned with DB/planner input price.
+                price_ore_per_kwh=spot,
                 spot_price_ore_per_kwh=spot,
                 price_without_fees_ore_per_kwh=without_fees,
                 price_with_fees_ore_per_kwh=with_fees,
@@ -978,6 +1006,65 @@ async def get_plan(
         )
 
     return adjusted
+
+
+@app.get("/planning/sanity", tags=["planning"], summary="Validate/auto-fix plan sanity")
+async def planning_sanity(target_date: date, auto_fix: bool = False) -> dict[str, object]:
+    await _materialize_day_plan_if_missing(target_date)
+
+    planner = DayPlanner()
+    day_key = target_date.isoformat()
+    actions = PlanRepository.get_plan(day_key)
+    prices, provisional = await _get_day_prices_with_provisional_fallback(target_date)
+    if not prices:
+        raise HTTPException(status_code=404, detail="No prices available for sanity check")
+
+    start_soc = await _resolve_start_soc_for_day(target_date)
+    weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(target_date)
+    network_tariff = await tariff_service.get_network_tariff_24h()
+    tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
+
+    should_fix = bool(auto_fix) and bool(settings.planning_sanity_autofix_enabled)
+    updated_actions, report = apply_planning_sanity(
+        planner=planner,
+        day=target_date,
+        actions=actions,
+        prices=prices,
+        start_soc=start_soc,
+        tariff_ore_per_hour=tariff_24h,
+        pv_weather_factor_24h=weather_factors,
+        auto_fix=should_fix,
+    )
+
+    changed = bool(report.get("auto_fix_applied"))
+    if changed:
+        persisted_actions = [
+            PlanAction(
+                date_key=action.date_key,
+                start_time=action.start_time,
+                end_time=action.end_time,
+                action=action.action,
+                charge_power_w=action.charge_power_w,
+                target_soc=action.target_soc,
+                reason=action.reason,
+                is_manual_override=action.is_manual_override,
+            )
+            for action in updated_actions
+        ]
+        PlanRepository.replace_plan(day_key, persisted_actions)
+        simulation = planner.simulate(
+            target_date,
+            PlanRepository.get_plan(day_key),
+            start_soc,
+            pv_weather_factor_24h=weather_factors,
+        )
+        SimulationRepository.replace_points(day_key, simulation)
+
+    report["auto_fix_requested"] = bool(auto_fix)
+    report["auto_fix_effective"] = bool(should_fix)
+    report["used_provisional_prices"] = bool(provisional)
+    report["action_count"] = len(updated_actions)
+    return report
 
 
 @app.post("/planning/override", tags=["planning"], summary="Add manual override action")

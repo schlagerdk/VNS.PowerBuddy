@@ -316,6 +316,10 @@ class Settings(BaseSettings):
         default=1.0,
         alias="POWERBUDDY_CHEAP_SLOT_EQUAL_PRICE_TOLERANCE_ORE",
     )
+    price_order_swap_min_delta_ore: float = Field(
+        default=0.25,
+        alias="POWERBUDDY_PRICE_ORDER_SWAP_MIN_DELTA_ORE",
+    )
     cheap_slot_min_target_soc_percent: float = Field(
         default=80.0,
         alias="POWERBUDDY_CHEAP_SLOT_MIN_TARGET_SOC_PERCENT",
@@ -356,6 +360,120 @@ class Settings(BaseSettings):
     kpi_tracking_enabled: bool = Field(default=True, alias="POWERBUDDY_KPI_TRACKING_ENABLED")
     auto_tuning_enabled: bool = Field(default=True, alias="POWERBUDDY_AUTO_TUNING_ENABLED")
     auto_tuning_step_max_ratio: float = Field(default=0.12, alias="POWERBUDDY_AUTO_TUNING_STEP_MAX_RATIO")
+
+    # Planning sanity guardrail: validate/fix SOC readiness and expensive-hour behavior.
+    planning_sanity_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_SANITY_ENABLED",
+    )
+    planning_sanity_autofix_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_SANITY_AUTOFIX_ENABLED",
+    )
+    planning_sanity_target_soc_percent: float = Field(
+        default=100.0,
+        alias="POWERBUDDY_PLANNING_SANITY_TARGET_SOC_PERCENT",
+    )
+    planning_sanity_expensive_quantile: float = Field(
+        default=0.7,
+        alias="POWERBUDDY_PLANNING_SANITY_EXPENSIVE_QUANTILE",
+    )
+    planning_sanity_expensive_window_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_SANITY_EXPENSIVE_WINDOW_ENABLED",
+    )
+    planning_sanity_expensive_window_start_hour_local: int = Field(
+        default=17,
+        alias="POWERBUDDY_PLANNING_SANITY_EXPENSIVE_WINDOW_START_HOUR_LOCAL",
+    )
+    planning_sanity_expensive_window_end_hour_local: int = Field(
+        default=22,
+        alias="POWERBUDDY_PLANNING_SANITY_EXPENSIVE_WINDOW_END_HOUR_LOCAL",
+    )
+    planning_sanity_min_expensive_auto_share: float = Field(
+        default=0.6,
+        alias="POWERBUDDY_PLANNING_SANITY_MIN_EXPENSIVE_AUTO_SHARE",
+    )
+    planning_sanity_charge_candidate_quantile: float = Field(
+        default=0.4,
+        alias="POWERBUDDY_PLANNING_SANITY_CHARGE_CANDIDATE_QUANTILE",
+    )
+    planning_sanity_max_added_charge_hours: int = Field(
+        default=6,
+        alias="POWERBUDDY_PLANNING_SANITY_MAX_ADDED_CHARGE_HOURS",
+    )
+    planning_sanity_pv_credit_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_SANITY_PV_CREDIT_ENABLED",
+    )
+    planning_sanity_pv_credit_capture_ratio: float = Field(
+        default=0.7,
+        alias="POWERBUDDY_PLANNING_SANITY_PV_CREDIT_CAPTURE_RATIO",
+    )
+    planning_sanity_pv_credit_max_soc_percent: float = Field(
+        default=20.0,
+        alias="POWERBUDDY_PLANNING_SANITY_PV_CREDIT_MAX_SOC_PERCENT",
+    )
+    planning_sanity_pv_credit_min_kwh: float = Field(
+        default=0.5,
+        alias="POWERBUDDY_PLANNING_SANITY_PV_CREDIT_MIN_KWH",
+    )
+    planning_sanity_precheap_arbitrage_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_SANITY_PRECHEAP_ARBITRAGE_ENABLED",
+    )
+    planning_sanity_precheap_auto_soc_buffer_percent: float = Field(
+        default=3.0,
+        alias="POWERBUDDY_PLANNING_SANITY_PRECHEAP_AUTO_SOC_BUFFER_PERCENT",
+    )
+    planning_sanity_precheap_auto_min_delta_ore: float = Field(
+        default=2.0,
+        alias="POWERBUDDY_PLANNING_SANITY_PRECHEAP_AUTO_MIN_DELTA_ORE",
+    )
+    planning_sanity_precheap_auto_start_hour_local: int = Field(
+        default=5,
+        alias="POWERBUDDY_PLANNING_SANITY_PRECHEAP_AUTO_START_HOUR_LOCAL",
+    )
+    planning_variant_search_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_ENABLED",
+    )
+    planning_variant_search_candidate_count: int = Field(
+        default=9,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_CANDIDATE_COUNT",
+    )
+    planning_variant_search_max_precheap_auto_hours: int = Field(
+        default=8,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_MAX_PRECHEAP_AUTO_HOURS",
+    )
+    planning_variant_search_max_cheap_charge_hours: int = Field(
+        default=4,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_MAX_CHEAP_CHARGE_HOURS",
+    )
+    planning_variant_search_base_solar_weight: float = Field(
+        default=0.35,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_BASE_SOLAR_WEIGHT",
+    )
+    planning_variant_search_low_solar_weight: float = Field(
+        default=0.50,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_LOW_SOLAR_WEIGHT",
+    )
+    planning_variant_search_high_solar_weight: float = Field(
+        default=0.15,
+        alias="POWERBUDDY_PLANNING_VARIANT_SEARCH_HIGH_SOLAR_WEIGHT",
+    )
+    planning_quality_gate_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_PLANNING_QUALITY_GATE_ENABLED",
+    )
+    planning_quality_gate_minute_local: int = Field(
+        default=5,
+        alias="POWERBUDDY_PLANNING_QUALITY_GATE_MINUTE_LOCAL",
+    )
+    planning_quality_gate_retry_minute_local: int = Field(
+        default=25,
+        alias="POWERBUDDY_PLANNING_QUALITY_GATE_RETRY_MINUTE_LOCAL",
+    )
 
     # ── Tariff / fees ──────────────────────────────────────────────────────────
     # DSO network tariff fetched from Energi Data Service (DatahubPricelist).

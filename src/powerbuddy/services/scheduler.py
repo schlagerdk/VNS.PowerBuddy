@@ -13,6 +13,8 @@ from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot
 from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
+from powerbuddy.services.planning_sanity import apply_planning_sanity
+from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import PricePoint, get_price_provider
 from powerbuddy.services.tariff import tariff_service
 from powerbuddy.services.weather import weather_forecast_service
@@ -163,6 +165,34 @@ class PowerBuddyScheduler:
                 if not any(_overlaps(action, manual_action) for manual_action in manual_overrides)
             ]
         actions = frozen_actions + actions_future
+        actions, sanity_report = apply_planning_sanity(
+            planner=self.planner,
+            day=day,
+            actions=actions,
+            prices=prices,
+            start_soc=soc,
+            tariff_ore_per_hour=tariff_24h,
+            pv_weather_factor_24h=weather_factors,
+            auto_fix=bool(settings.planning_sanity_autofix_enabled),
+        )
+        if bool(sanity_report.get("auto_fix_applied")):
+            logger.info("Planning sanity autofix adjusted %s action(s) for %s", sanity_report.get("changes"), day)
+        actions, variant_report = choose_best_plan_variant(
+            planner=self.planner,
+            day=day,
+            actions=actions,
+            prices=prices,
+            start_soc=soc,
+            tariff_ore_per_hour=tariff_24h,
+            pv_weather_factor_24h=weather_factors,
+        )
+        if variant_report.get("best_changes"):
+            logger.info(
+                "Variant search selected cheaper plan for %s (changes=%s, score=%s)",
+                day,
+                variant_report.get("best_changes"),
+                variant_report.get("best_score_ore"),
+            )
         PlanRepository.replace_plan(day_key, actions)
         actions_for_simulation = PlanRepository.get_plan(day_key)
         if planning_start is not None:
@@ -409,6 +439,45 @@ class PowerBuddyScheduler:
             )
         else:
             logger.info("Midnight forward replan completed with no replanned days")
+
+    async def daily_quality_gate_replan(self) -> None:
+        """
+        Deterministic daily quality gate after day-ahead publication:
+        - Focuses on tomorrow's plan
+        - Re-fetches prices and regenerates plan when available
+        """
+        if not settings.planning_quality_gate_enabled:
+            return
+
+        now = datetime.now()
+        target_day = now.date() + timedelta(days=1)
+
+        existing_prices = PriceRepository.get_by_day(target_day, settings.price_area)
+        if not self._should_fetch_day(target_day, now, existing_prices):
+            logger.info(
+                "Quality gate skipped for %s before publication window (%02d:00)",
+                target_day,
+                settings.day_ahead_publish_hour_local,
+            )
+            return
+
+        try:
+            fetched_prices = await self.price_provider.get_day_prices(target_day, settings.price_area)
+        except Exception as exc:
+            logger.warning("Quality gate price fetch failed for %s: %s", target_day, exc)
+            return
+
+        if fetched_prices:
+            PriceRepository.upsert_prices(fetched_prices)
+
+        prices = PriceRepository.get_by_day(target_day, settings.price_area)
+        if not prices:
+            logger.warning("Quality gate could not build plan for %s: no prices", target_day)
+            return
+
+        soc = await self._resolve_start_soc_for_day(target_day)
+        await self._plan_and_simulate(target_day, prices, soc)
+        logger.info("Daily quality gate completed for %s", target_day)
 
     async def snapshot_power(self) -> None:
         data = await self.inverter_client.get_realtime()
@@ -825,6 +894,9 @@ class PowerBuddyScheduler:
 
     def start(self) -> None:
         interval_min = max(1, settings.price_recheck_interval_minutes)
+        publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+        quality_minute = max(0, min(59, int(settings.planning_quality_gate_minute_local)))
+        retry_minute = max(0, min(59, int(settings.planning_quality_gate_retry_minute_local)))
 
         # Runs every N minutes: fetch prices for forward horizon, re-plan on changes
         self.scheduler.add_job(
@@ -838,16 +910,32 @@ class PowerBuddyScheduler:
         self.scheduler.add_job(
             self.refresh_prices_and_replan,
             "cron",
-            hour=14,
-            minute=5,
-            id="day-ahead-refresh-1405",
+            hour=publish_hour,
+            minute=quality_minute,
+            id="day-ahead-refresh-primary",
         )
         self.scheduler.add_job(
             self.refresh_prices_and_replan,
             "cron",
-            hour=14,
-            minute=20,
-            id="day-ahead-refresh-1420",
+            hour=publish_hour,
+            minute=retry_minute,
+            id="day-ahead-refresh-retry",
+        )
+
+        # Daily quality gate focused on tomorrow's final day-ahead plan quality.
+        self.scheduler.add_job(
+            self.daily_quality_gate_replan,
+            "cron",
+            hour=publish_hour,
+            minute=quality_minute,
+            id="daily-quality-gate-primary",
+        )
+        self.scheduler.add_job(
+            self.daily_quality_gate_replan,
+            "cron",
+            hour=publish_hour,
+            minute=retry_minute,
+            id="daily-quality-gate-retry",
         )
 
         # Power snapshot every 5 minutes

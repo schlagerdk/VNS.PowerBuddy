@@ -739,8 +739,8 @@ class DayPlanner:
         # Anti-idiotic normalization: if a pricier hour charges while a clearly cheaper hour holds,
         # swap the actions when constraints remain feasible.
         if total_cost_levels:
-            swap_threshold = max(4.0, cheap_slot_min_spread * 0.25)
-            max_passes = 4
+            swap_threshold = max(0.0, float(settings.price_order_swap_min_delta_ore))
+            max_passes = max(4, len(actions) * 2)
             for _ in range(max_passes):
                 changed = False
                 charge_indices = [idx for idx, action in enumerate(actions) if action.action == "charge"]

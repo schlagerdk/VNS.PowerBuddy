@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class PriceOut(BaseModel):
     timestamp: datetime
     area: str
-    # Backward compatible primary price field (end-user price incl. transport/fees).
+    # Primary canonical price field: exactly the value stored in DB and used by planner.
     price_ore_per_kwh: float
     # Spot price only (no supplier markup, no transport, no VAT uplift).
     spot_price_ore_per_kwh: float | None = None
