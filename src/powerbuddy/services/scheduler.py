@@ -49,8 +49,8 @@ class PowerBuddyScheduler:
         """Return the expected battery SOC at the start of 'day' (local midnight 00:00).
 
         For today or past: returns live SOC.
-        For future days: simulates today's remaining plan from current SOC and returns
-        the projected end-of-day SOC so the plan starts with an accurate state.
+        For future days: simulates plans day-by-day from now until target day, so
+        each day starts from the prior day's projected end-of-day SOC.
         """
         today = date.today()
         live_soc = await self._fetch_soc()
@@ -58,29 +58,45 @@ class PowerBuddyScheduler:
         if day <= today:
             return live_soc
 
-        today_actions = PlanRepository.get_plan(today.isoformat())
-        if not today_actions:
-            return live_soc
-
         tz = ZoneInfo(settings.timezone)
         now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
-        remaining_actions = [
-            a for a in today_actions
-            if (a.start_time.replace(tzinfo=None) if a.start_time.tzinfo else a.start_time) >= now_local_hour
-        ]
-        if not remaining_actions:
-            return live_soc
+        projected_soc = max(float(settings.battery_min_soc), min(100.0, float(live_soc)))
 
-        try:
-            weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(today)
-            simulation = self.planner.simulate(today, remaining_actions, start_soc=live_soc, pv_weather_factor_24h=weather_factors)
-            if simulation:
-                projected_soc = simulation[-1].projected_soc
-                return max(float(settings.battery_min_soc), min(100.0, projected_soc))
-        except Exception:
-            pass
+        cursor_day = today
+        while cursor_day < day:
+            day_actions = PlanRepository.get_plan(cursor_day.isoformat())
+            if not day_actions:
+                break
 
-        return live_soc
+            if cursor_day == today:
+                day_actions = [
+                    a for a in day_actions
+                    if (a.start_time.replace(tzinfo=None) if a.start_time.tzinfo else a.start_time) >= now_local_hour
+                ]
+
+            if not day_actions:
+                cursor_day += timedelta(days=1)
+                continue
+
+            try:
+                weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(cursor_day)
+                simulation = self.planner.simulate(
+                    cursor_day,
+                    day_actions,
+                    start_soc=projected_soc,
+                    pv_weather_factor_24h=weather_factors,
+                )
+                if simulation:
+                    projected_soc = max(
+                        float(settings.battery_min_soc),
+                        min(100.0, float(simulation[-1].projected_soc)),
+                    )
+            except Exception:
+                break
+
+            cursor_day += timedelta(days=1)
+
+        return projected_soc
 
     def is_execution_enabled(self) -> bool:
         return bool(self._execution_enabled)
@@ -299,6 +315,11 @@ class PowerBuddyScheduler:
         # Keep compatibility with explicit day-ahead prefetch setting.
         configured_end = now + timedelta(days=max(0, int(settings.price_fetch_days_ahead)))
         end_date = max(horizon_end.date(), configured_end.date())
+
+        # Also include all future days for which released prices already exist locally.
+        latest_stored_day = PriceRepository.get_latest_day(settings.price_area)
+        if latest_stored_day is not None:
+            end_date = max(end_date, latest_stored_day)
 
         days: list[date] = []
         current = now.date()

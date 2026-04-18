@@ -59,7 +59,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.1",
+    version="1.0.2",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -126,9 +126,9 @@ async def _resolve_start_soc_for_day(day: date) -> float:
     """Return the expected battery SOC at the start of 'day' (local midnight 00:00).
 
     - day == today or past: return live SOC directly (plan starts from current state).
-    - day > today: simulate today's remaining plan actions from current SOC and return
-      the projected end-of-day SOC so the plan for tomorrow starts with accurate state.
-    - Falls back to live SOC if today has no plan or simulation fails.
+    - day > today: simulate plans day-by-day from now until target day, so each
+      day starts from the prior day's projected end-of-day SOC.
+    - Falls back to latest known SOC if a plan/simulation step is missing.
     """
     today = date.today()
     live_soc = await _resolve_current_soc()
@@ -136,28 +136,43 @@ async def _resolve_start_soc_for_day(day: date) -> float:
     if day <= today:
         return live_soc
 
-    # Future day — project through end of today to estimate SOC at midnight.
-    today_actions = PlanRepository.get_plan(today.isoformat())
-    if not today_actions:
-        return live_soc
-
+    planner = DayPlanner()
     tz = ZoneInfo(settings.timezone)
     now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
-    remaining_actions = [a for a in today_actions if _naive_ts(a.start_time) >= now_local_hour]
-    if not remaining_actions:
-        return live_soc
+    projected_soc = max(float(settings.battery_min_soc), min(100.0, float(live_soc)))
 
-    try:
-        planner = DayPlanner()
-        weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(today)
-        simulation = planner.simulate(today, remaining_actions, start_soc=live_soc, pv_weather_factor_24h=weather_factors)
-        if simulation:
-            projected_soc = simulation[-1].projected_soc
-            return max(float(settings.battery_min_soc), min(100.0, projected_soc))
-    except Exception:
-        pass
+    cursor_day = today
+    while cursor_day < day:
+        day_actions = PlanRepository.get_plan(cursor_day.isoformat())
+        if not day_actions:
+            break
 
-    return live_soc
+        if cursor_day == today:
+            day_actions = [a for a in day_actions if _naive_ts(a.start_time) >= now_local_hour]
+
+        if not day_actions:
+            cursor_day += timedelta(days=1)
+            continue
+
+        try:
+            weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(cursor_day)
+            simulation = planner.simulate(
+                cursor_day,
+                day_actions,
+                start_soc=projected_soc,
+                pv_weather_factor_24h=weather_factors,
+            )
+            if simulation:
+                projected_soc = max(
+                    float(settings.battery_min_soc),
+                    min(100.0, float(simulation[-1].projected_soc)),
+                )
+        except Exception:
+            break
+
+        cursor_day += timedelta(days=1)
+
+    return projected_soc
 
 
 async def _ensure_prices_with_fallback(requested_day: date) -> tuple[date, list, bool]:
@@ -202,6 +217,40 @@ async def _ensure_prices_for_window(start: datetime, end: datetime) -> None:
             if fetched:
                 PriceRepository.upsert_prices(fetched)
         current_day += timedelta(days=1)
+
+
+async def _discover_latest_released_day_from(start_day: date) -> date | None:
+    """
+    Discover latest released day from `start_day` forward by probing providers day-by-day.
+
+    This is more reliable than provider metadata methods for sources that only report
+    latest historical day and not latest future published day.
+    """
+    provider = get_price_provider()
+    max_days_ahead = max(2, int(settings.price_fetch_days_ahead))
+    latest_released: date | None = None
+
+    for offset in range(0, max_days_ahead + 1):
+        day = start_day + timedelta(days=offset)
+        prices = PriceRepository.get_by_day(day, settings.price_area)
+        if not prices:
+            try:
+                fetched = await provider.get_day_prices(day, settings.price_area)
+            except Exception:
+                fetched = []
+            if fetched:
+                PriceRepository.upsert_prices(fetched)
+                prices = PriceRepository.get_by_day(day, settings.price_area)
+
+        if prices:
+            latest_released = day
+            continue
+
+        # Day-ahead publication is contiguous in practice; stop at first missing future day.
+        if day > start_day:
+            break
+
+    return latest_released
 
 
 async def _reconcile_after_plan_change() -> None:
@@ -739,11 +788,13 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
 async def get_prices(
     target_date: date | None = None,
     from_timestamp: datetime | None = None,
-    hours: int = 24,
+    hours: int | None = None,
 ) -> list[PriceOut]:
     """
-    Default behavior (no query params): return prices from current whole hour and
-    24 hours forward.
+    Default behavior (no query params): return all released prices from current
+    whole hour and forward.
+
+    If `hours` is provided, limit the horizon to that many hours (max 72).
 
     Backward-compatible behavior: if target_date is provided, return that day's
     prices (00:00..24:00).
@@ -757,15 +808,35 @@ async def get_prices(
                 PriceRepository.upsert_prices(fetched)
                 prices = PriceRepository.get_by_day(target_date, settings.price_area)
     else:
-        horizon_hours = max(1, min(hours, 72))
-        start = from_timestamp.astimezone(timezone.utc) if from_timestamp else datetime.now(timezone.utc)
+        if from_timestamp is None:
+            start = datetime.now(timezone.utc)
+        elif from_timestamp.tzinfo is None:
+            start = from_timestamp.replace(tzinfo=timezone.utc)
+        else:
+            start = from_timestamp.astimezone(timezone.utc)
         start = start.replace(minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=horizon_hours)
+
+        if hours is not None:
+            horizon_hours = max(1, min(int(hours), 72))
+            end = start + timedelta(hours=horizon_hours)
+        else:
+            latest_available_day = await _discover_latest_released_day_from(start.date())
+            if latest_available_day is None:
+                end = start + timedelta(hours=1)
+            else:
+                latest_end = datetime.combine(
+                    latest_available_day + timedelta(days=1),
+                    datetime.min.time(),
+                    tzinfo=timezone.utc,
+                )
+                end = latest_end if latest_end > start else start + timedelta(hours=1)
+            horizon_hours = max(1, int((end - start).total_seconds() // 3600))
+
         await _ensure_prices_for_window(start, end)
 
         raw_prices = PriceRepository.get_by_time_window(start, end, settings.price_area)
 
-        if not settings.allow_provisional_prices:
+        if hours is None or not settings.allow_provisional_prices:
             prices = raw_prices
         else:
             def _slot_key(dt: datetime) -> datetime:
@@ -940,9 +1011,6 @@ async def get_plan(
             if _naive_ts(action.start_time).date() == target_date
         ]
     else:
-        default_hours = max(24, int(settings.planning_horizon_hours))
-        horizon_hours = max(1, min(int(hours) if hours is not None else default_hours, 72))
-
         if from_timestamp is None:
             start = datetime.now(timezone.utc)
         elif from_timestamp.tzinfo is None:
@@ -951,7 +1019,22 @@ async def get_plan(
             start = from_timestamp.astimezone(timezone.utc)
 
         start = start.replace(minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=horizon_hours)
+
+        if hours is not None:
+            horizon_hours = max(1, min(int(hours), 72))
+            end = start + timedelta(hours=horizon_hours)
+        else:
+            latest_available_day = await _discover_latest_released_day_from(start.date())
+            if latest_available_day is None:
+                end = start + timedelta(hours=1)
+            else:
+                latest_end = datetime.combine(
+                    latest_available_day + timedelta(days=1),
+                    datetime.min.time(),
+                    tzinfo=timezone.utc,
+                )
+                end = latest_end if latest_end > start else start + timedelta(hours=1)
+
         await _ensure_plan_for_window(start, end)
         actions = PlanRepository.get_plan_window(start, end)
 
