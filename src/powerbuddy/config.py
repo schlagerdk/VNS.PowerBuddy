@@ -1,5 +1,37 @@
+from typing import Final
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BYD_HVM_CAPACITY_POWER_KW: Final[dict[float, float]] = {
+    8.3: 4.51,
+    11.0: 5.63,
+    13.8: 6.76,
+    16.6: 7.88,
+    19.3: 9.01,
+    22.1: 9.01,
+}
+
+FIXED_BATTERY_MIN_SOC: Final[int] = 5
+FIXED_BATTERY_MAX_SOC: Final[int] = 100
+DEFAULT_BATTERY_CAPACITY_KWH: Final[float] = 13.8
+
+_detected_battery_capacity_kwh: float | None = None
+
+
+def set_detected_battery_capacity_kwh(capacity_kwh: float | None) -> None:
+    global _detected_battery_capacity_kwh
+    if capacity_kwh is None:
+        return
+    value = float(capacity_kwh)
+    if value <= 0.0:
+        return
+    _detected_battery_capacity_kwh = value
+
+
+def get_detected_battery_capacity_kwh() -> float | None:
+    return _detected_battery_capacity_kwh
 
 
 class Settings(BaseSettings):
@@ -20,6 +52,10 @@ class Settings(BaseSettings):
     execution_non_charge_refresh_seconds: int = Field(
         default=60,
         alias="POWERBUDDY_EXECUTION_NON_CHARGE_REFRESH_SECONDS",
+    )
+    inverter_realtime_cache_seconds: float = Field(
+        default=2.0,
+        alias="POWERBUDDY_INVERTER_REALTIME_CACHE_SECONDS",
     )
     hold_reassert_threshold_w: float = Field(
         default=120.0,
@@ -56,14 +92,14 @@ class Settings(BaseSettings):
     modbus_hold_writes_json: str = Field(default="", alias="POWERBUDDY_MODBUS_HOLD_WRITES_JSON")
     modbus_discharge_writes_json: str = Field(default="", alias="POWERBUDDY_MODBUS_DISCHARGE_WRITES_JSON")
 
-    battery_capacity_kwh: float = Field(default=13.0, alias="POWERBUDDY_BATTERY_CAPACITY_KWH")
-    battery_min_soc: int = Field(default=20, alias="POWERBUDDY_BATTERY_MIN_SOC")
-    battery_max_soc: int = Field(default=95, alias="POWERBUDDY_BATTERY_MAX_SOC")
-    # Expected practical charging power used for planning/execution (often below inverter max).
-    planned_charge_kw: float = Field(default=3.5, alias="POWERBUDDY_PLANNED_CHARGE_KW")
-    max_charge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_CHARGE_KW")
-    default_charge_power_w: int = Field(default=6000, alias="POWERBUDDY_DEFAULT_CHARGE_POWER_W")
-    max_discharge_kw: float = Field(default=5.0, alias="POWERBUDDY_MAX_DISCHARGE_KW")
+    # Override with numeric kW values, or use "auto" to derive limits from BYD HVM table.
+    max_charge_kw_override: str = Field(default="auto", alias="POWERBUDDY_MAX_CHARGE_KW")
+    max_discharge_kw_override: str = Field(default="auto", alias="POWERBUDDY_MAX_DISCHARGE_KW")
+    # Backward compatibility: keep accepting deprecated keys present in existing .env files.
+    legacy_battery_capacity_kwh: float | None = Field(default=None, alias="POWERBUDDY_BATTERY_CAPACITY_KWH")
+    legacy_battery_min_soc: int | None = Field(default=None, alias="POWERBUDDY_BATTERY_MIN_SOC")
+    legacy_battery_max_soc: int | None = Field(default=None, alias="POWERBUDDY_BATTERY_MAX_SOC")
+    legacy_planned_charge_kw: float | None = Field(default=None, alias="POWERBUDDY_PLANNED_CHARGE_KW")
     hold_charge_power_w: float = Field(default=5.0, alias="POWERBUDDY_HOLD_CHARGE_POWER_W")
     hold_solar_capture_enabled: bool = Field(
         default=True,
@@ -533,6 +569,65 @@ class Settings(BaseSettings):
         default=False,
         alias="POWERBUDDY_CORS_ALLOW_CREDENTIALS",
     )
+
+    @staticmethod
+    def _parse_kw_override(raw_value: str | float | int | None) -> float | None:
+        if raw_value is None:
+            return None
+        text = str(raw_value).strip().lower()
+        if text in {"", "auto", "none", "null"}:
+            return None
+        try:
+            value = float(text)
+        except Exception:
+            return None
+        if value <= 0.0:
+            return None
+        return value
+
+    @staticmethod
+    def _nearest_hvm_capacity_kwh(capacity_kwh: float) -> float:
+        return min(
+            BYD_HVM_CAPACITY_POWER_KW.keys(),
+            key=lambda candidate: abs(candidate - float(capacity_kwh)),
+        )
+
+    @property
+    def battery_capacity_kwh(self) -> float:
+        if _detected_battery_capacity_kwh is not None:
+            return float(self._nearest_hvm_capacity_kwh(_detected_battery_capacity_kwh))
+        return float(DEFAULT_BATTERY_CAPACITY_KWH)
+
+    @property
+    def battery_capacity_source(self) -> str:
+        return "detected" if _detected_battery_capacity_kwh is not None else "fallback-default"
+
+    @property
+    def battery_auto_power_limit_kw(self) -> float:
+        capacity_key = self._nearest_hvm_capacity_kwh(self.battery_capacity_kwh)
+        return float(BYD_HVM_CAPACITY_POWER_KW[capacity_key])
+
+    @property
+    def battery_min_soc(self) -> int:
+        return int(FIXED_BATTERY_MIN_SOC)
+
+    @property
+    def battery_max_soc(self) -> int:
+        return int(FIXED_BATTERY_MAX_SOC)
+
+    @property
+    def max_charge_kw(self) -> float:
+        override = self._parse_kw_override(self.max_charge_kw_override)
+        return float(override if override is not None else self.battery_auto_power_limit_kw)
+
+    @property
+    def max_discharge_kw(self) -> float:
+        override = self._parse_kw_override(self.max_discharge_kw_override)
+        return float(override if override is not None else self.battery_auto_power_limit_kw)
+
+    @property
+    def default_charge_power_w(self) -> int:
+        return int(round(self.max_charge_kw * 1000.0))
 
 
 settings = Settings()

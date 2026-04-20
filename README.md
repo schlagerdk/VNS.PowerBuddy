@@ -32,7 +32,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.2`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.3`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -170,6 +170,14 @@ Scheduler behavior:
 - Planning horizon is controlled by `POWERBUDDY_PLANNING_HORIZON_HOURS` (minimum effective horizon is 48 hours).
 - Automatic planning is regenerated only when fetched prices for a day actually change.
 - After prices are fetched and unchanged, plans stay locked unless edited manually.
+
+Battery power limits:
+
+- `POWERBUDDY_MAX_CHARGE_KW` and `POWERBUDDY_MAX_DISCHARGE_KW` now accept either a numeric value or `auto`.
+- `auto` uses the BYD HVM charge/discharge table based on battery capacity discovered from the inverter at startup: 8.3->4.51 kW, 11.0->5.63 kW, 13.8->6.76 kW, 16.6->7.88 kW, 19.3/22.1->9.01 kW.
+- If inverter capacity discovery is unavailable, the fallback profile is HVM 13.8.
+- Battery SOC bounds are fixed in code (min 5%, max 100%).
+- Legacy keys `POWERBUDDY_BATTERY_CAPACITY_KWH`, `POWERBUDDY_BATTERY_MIN_SOC`, `POWERBUDDY_BATTERY_MAX_SOC`, `POWERBUDDY_PLANNED_CHARGE_KW`, and `POWERBUDDY_DEFAULT_CHARGE_POWER_W` are no longer required.
 
 ## Consumption Model
 

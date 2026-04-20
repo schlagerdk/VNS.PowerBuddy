@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import hashlib
@@ -14,6 +15,8 @@ import httpx
 from powerbuddy.config import settings
 
 logger = logging.getLogger(__name__)
+
+_inverter_client_singleton: InverterClient | None = None
 
 
 @dataclass(slots=True)
@@ -33,17 +36,29 @@ class InverterClient:
     async def apply_action(self, action: str, charge_power_w: float | None = None) -> bool:
         raise NotImplementedError
 
+    async def get_battery_capacity_kwh(self) -> float | None:
+        return None
+
 
 class FroniusClient(InverterClient):
     def __init__(self, url: str) -> None:
         self.url = url
+        self._realtime_cache: RealtimePowerData | None = None
+        self._realtime_cache_until: datetime = datetime.min.replace(tzinfo=timezone.utc)
+        self._realtime_lock = asyncio.Lock()
 
     @property
     def _origin(self) -> str:
         parsed = urlsplit(self.url)
         return f"{parsed.scheme}://{parsed.netloc}"
 
-    async def get_realtime(self) -> RealtimePowerData:
+    def _realtime_cache_ttl_seconds(self) -> float:
+        return max(0.0, float(settings.inverter_realtime_cache_seconds))
+
+    def _is_realtime_cache_valid(self, now_utc: datetime) -> bool:
+        return self._realtime_cache is not None and now_utc < self._realtime_cache_until
+
+    async def _fetch_realtime_uncached(self) -> RealtimePowerData:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(self.url)
             response.raise_for_status()
@@ -71,6 +86,117 @@ class FroniusClient(InverterClient):
             battery_power_w=battery_power,
             battery_soc=battery_soc,
         )
+
+    async def get_realtime(self) -> RealtimePowerData:
+        ttl = self._realtime_cache_ttl_seconds()
+        now_utc = datetime.now(timezone.utc)
+        if ttl > 0.0 and self._is_realtime_cache_valid(now_utc):
+            return self._realtime_cache  # type: ignore[return-value]
+
+        async with self._realtime_lock:
+            now_utc = datetime.now(timezone.utc)
+            if ttl > 0.0 and self._is_realtime_cache_valid(now_utc):
+                return self._realtime_cache  # type: ignore[return-value]
+
+            realtime = await self._fetch_realtime_uncached()
+            if ttl > 0.0:
+                self._realtime_cache = realtime
+                self._realtime_cache_until = realtime.timestamp + timedelta(seconds=ttl)
+            return realtime
+
+    @staticmethod
+    def _extract_battery_capacity_kwh(payload: object) -> float | None:
+        if not isinstance(payload, (dict, list)):
+            return None
+
+        candidates: list[tuple[int, float]] = []
+
+        def _visit(node: object, path: str = "") -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    next_path = f"{path}.{key}" if path else str(key)
+                    _visit(value, next_path)
+                return
+            if isinstance(node, list):
+                for idx, value in enumerate(node):
+                    next_path = f"{path}[{idx}]"
+                    _visit(value, next_path)
+                return
+
+            value_f: float | None = None
+            if isinstance(node, (int, float)):
+                value_f = float(node)
+            elif isinstance(node, str):
+                stripped = node.strip()
+                if not stripped:
+                    return
+                try:
+                    value_f = float(stripped)
+                except Exception:
+                    return
+            if value_f is None or value_f <= 0.0:
+                return
+
+            lower_path = path.lower()
+            if any(token in lower_path for token in ("soc", "percent", "power", "current", "remaining", "available", "temp")):
+                return
+
+            score = 0
+            if "capacity" in lower_path:
+                score += 4
+            if "energyfull" in lower_path or "energy_full" in lower_path:
+                score += 5
+            if any(token in lower_path for token in ("nominal", "rated", "design", "installed", "usable")):
+                score += 2
+            if any(token in lower_path for token in ("battery", "bat_", "akku")):
+                score += 1
+            if score < 4:
+                return
+
+            if "kwh" in lower_path:
+                value_kwh = value_f
+            elif "wh" in lower_path:
+                value_kwh = value_f / 1000.0
+            else:
+                value_kwh = value_f / 1000.0 if value_f > 100.0 else value_f
+
+            if 3.0 <= value_kwh <= 30.0:
+                candidates.append((score, float(value_kwh)))
+
+        _visit(payload)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return float(candidates[0][1])
+
+    async def _get_fronius_json(self, path: str, timeout_seconds: int = 5) -> dict | None:
+        try:
+            async with httpx.AsyncClient(timeout=max(2, timeout_seconds)) as client:
+                response = await client.get(f"{self._origin}{path}")
+                response.raise_for_status()
+                data = response.json()
+                return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def get_battery_capacity_kwh(self) -> float | None:
+        # Prefer authenticated Fronius battery config, then fallback to storage realtime endpoint.
+        config_payload = await self._fronius_digest_request("GET", "/api/config/batteries")
+        capacity = self._extract_battery_capacity_kwh(config_payload)
+        if capacity is not None:
+            return capacity
+
+        storage_payload = await self._get_fronius_json("/solar_api/v1/GetStorageRealtimeData.fcgi")
+        capacity = self._extract_battery_capacity_kwh(storage_payload)
+        if capacity is not None:
+            return capacity
+
+        storage_payload_cgi = await self._get_fronius_json("/solar_api/v1/GetStorageRealtimeData.cgi")
+        capacity = self._extract_battery_capacity_kwh(storage_payload_cgi)
+        if capacity is not None:
+            return capacity
+
+        return None
 
     @staticmethod
     def _action_url(action: str) -> str:
@@ -494,8 +620,13 @@ class FroniusClient(InverterClient):
 
 
 def get_inverter_client() -> InverterClient:
+    global _inverter_client_singleton
+    if _inverter_client_singleton is not None:
+        return _inverter_client_singleton
+
     if settings.inverter_type.lower() == "fronius":
         if not settings.fronius_url:
             raise ValueError("Missing POWERBUDDY_FRONIUS_URL in environment")
-        return FroniusClient(settings.fronius_url)
+        _inverter_client_singleton = FroniusClient(settings.fronius_url)
+        return _inverter_client_singleton
     raise ValueError(f"Unsupported inverter type: {settings.inverter_type}")

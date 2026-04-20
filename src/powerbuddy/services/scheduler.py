@@ -835,9 +835,7 @@ class PowerBuddyScheduler:
                     and soc < (float(settings.battery_max_soc) - 0.2)
                 ):
                     runtime_action = "charge"
-                    default_charge_kw = max(0.0, float(settings.default_charge_power_w) / 1000.0)
-                    effective_charge_kw = default_charge_kw if default_charge_kw > 0.0 else float(settings.planned_charge_kw)
-                    current_charge_power_w = round(min(float(settings.max_charge_kw), effective_charge_kw) * 1000.0, 1)
+                    current_charge_power_w = round(float(settings.max_charge_kw) * 1000.0, 1)
                     logger.info(
                         "Hold overridden to charge due to solar surplus (pv=%.1fW, load=%.1fW, surplus=%.1fW, grid=%.1fW, soc=%.1f%%)",
                         pv_w,
@@ -856,9 +854,7 @@ class PowerBuddyScheduler:
                 low_soc_threshold = float(settings.battery_min_soc) + float(settings.low_soc_force_charge_margin_percent)
                 if float(realtime_low_soc.battery_soc) <= low_soc_threshold:
                     runtime_action = "charge"
-                    default_charge_kw = max(0.0, float(settings.default_charge_power_w) / 1000.0)
-                    effective_charge_kw = default_charge_kw if default_charge_kw > 0.0 else float(settings.planned_charge_kw)
-                    current_charge_power_w = round(min(float(settings.max_charge_kw), effective_charge_kw) * 1000.0, 1)
+                    current_charge_power_w = round(float(settings.max_charge_kw) * 1000.0, 1)
                     logger.warning(
                         "Hold overridden to charge due to low SOC (soc=%.1f%% threshold=%.1f%%)",
                         float(realtime_low_soc.battery_soc),

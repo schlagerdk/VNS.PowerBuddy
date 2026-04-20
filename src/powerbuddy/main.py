@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
+import logging
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from powerbuddy.config import settings
+from powerbuddy.config import set_detected_battery_capacity_kwh, settings
 from powerbuddy.database import init_db
 from powerbuddy.models import PlanAction, PricePoint
 from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
@@ -37,12 +38,40 @@ from powerbuddy.services.tariff import tariff_service
 from powerbuddy.services.weather import weather_forecast_service
 
 
+logger = logging.getLogger(__name__)
+
+
 scheduler = PowerBuddyScheduler()
+
+
+async def _discover_battery_capacity() -> None:
+    try:
+        client = get_inverter_client()
+        capacity = await client.get_battery_capacity_kwh()
+    except Exception as exc:
+        logger.warning("Battery capacity discovery failed: %s", exc)
+        return
+
+    if capacity is None:
+        logger.warning("Battery capacity discovery returned no value; using fallback default")
+        return
+
+    set_detected_battery_capacity_kwh(capacity)
+    # Scheduler owns a long-lived planner instance created at import time.
+    # Recreate it to use freshly detected battery capacity.
+    scheduler.planner = DayPlanner()
+    logger.info(
+        "Detected battery capacity %.2f kWh (effective HVM size %.1f, max power %.2f kW)",
+        float(capacity),
+        float(settings.battery_capacity_kwh),
+        float(settings.battery_auto_power_limit_kw),
+    )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    await _discover_battery_capacity()
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -59,7 +88,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.2",
+    version="1.0.3",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -272,12 +301,12 @@ def _overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: date
 
 def _resolve_default_charge_power_w(action: str, charge_power_w: float | None) -> float | None:
     if action == "charge" and charge_power_w is None:
-        return float(settings.default_charge_power_w)
+        return float(settings.max_charge_kw) * 1000.0
     return charge_power_w
 
 
 def _effective_charge_power_w(charge_power_w: float | None) -> float:
-    requested = float(charge_power_w) if charge_power_w is not None else float(settings.default_charge_power_w)
+    requested = float(charge_power_w) if charge_power_w is not None else (float(settings.max_charge_kw) * 1000.0)
     return max(0.0, min(requested, float(settings.max_charge_kw) * 1000.0))
 
 
@@ -553,6 +582,15 @@ def get_config() -> dict[str, object]:
         "price_area": settings.price_area,
         "inverter_type": settings.inverter_type,
         "inverter_url": settings.fronius_url,
+        "battery_capacity_kwh": settings.battery_capacity_kwh,
+        "battery_capacity_source": settings.battery_capacity_source,
+        "battery_auto_power_limit_kw": settings.battery_auto_power_limit_kw,
+        "battery_min_soc_fixed": settings.battery_min_soc,
+        "battery_max_soc_fixed": settings.battery_max_soc,
+        "max_charge_kw_effective": settings.max_charge_kw,
+        "max_discharge_kw_effective": settings.max_discharge_kw,
+        "max_charge_kw_override": settings.max_charge_kw_override,
+        "max_discharge_kw_override": settings.max_discharge_kw_override,
         "feed_in_tariff_ore": settings.feed_in_tariff_ore,
         "charge_efficiency": settings.charge_efficiency,
         "discharge_efficiency": settings.discharge_efficiency,
