@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import base64
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
+import hashlib
+import hmac
 import logging
+import re
+import time
+from pathlib import Path
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from powerbuddy.config import set_detected_battery_capacity_kwh, settings
+from powerbuddy.dashboard_ui import render_dashboard_html
 from powerbuddy.database import init_db
 from powerbuddy.models import PlanAction, PricePoint
 from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
@@ -33,6 +44,7 @@ from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.planning_sanity import apply_planning_sanity
 from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import get_price_provider
+from powerbuddy.services.easee import get_easee_status
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
 from powerbuddy.services.weather import weather_forecast_service
@@ -42,6 +54,532 @@ logger = logging.getLogger(__name__)
 
 
 scheduler = PowerBuddyScheduler()
+
+
+def _request_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first.startswith("::ffff:"):
+            first = first[7:]
+        return first
+    client_host = request.client.host if request.client else ""
+    if client_host.startswith("::ffff:"):
+        client_host = client_host[7:]
+    return client_host
+
+
+def _dashboard_signing_secret() -> bytes:
+    secret = (settings.dashboard_secret or "").strip()
+    return secret.encode("utf-8")
+
+
+def _dashboard_is_trusted_ip(ip: str) -> bool:
+    if not ip:
+        return False
+    trusted = settings.dashboard_trusted_ip_list
+    return ip in trusted
+
+
+def _dashboard_is_password_valid(password: str) -> bool:
+    if not password:
+        return False
+    for expected in settings.dashboard_password_list:
+        if hmac.compare_digest(password, expected):
+            return True
+    return False
+
+
+def _dashboard_encode_token(ip: str) -> str:
+    now_epoch = int(time.time())
+    payload = f"{now_epoch}:{ip}"
+    secret = _dashboard_signing_secret()
+    signature = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    raw = f"{payload}|{signature}".encode("utf-8")
+    token = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    return token
+
+
+def _dashboard_decode_token(token: str, ip: str) -> bool:
+    if not token:
+        return False
+
+    secret = _dashboard_signing_secret()
+    if not secret:
+        return False
+
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+        payload, signature = decoded.rsplit("|", 1)
+        issued_text, token_ip = payload.split(":", 1)
+        expected_sig = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return False
+
+        if token_ip != ip:
+            return False
+
+        issued = int(issued_text)
+        age = int(time.time()) - issued
+        if age < 0:
+            return False
+        if age > max(60, int(settings.dashboard_session_ttl_seconds)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _dashboard_cookie_options(request: Request) -> dict[str, object]:
+    max_age = max(60, int(settings.dashboard_session_ttl_seconds))
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+    secure = request.url.scheme == "https" or "https" in forwarded_proto
+    return {
+        "httponly": True,
+        "samesite": "lax",
+        "secure": secure,
+        "max_age": max_age,
+        "path": "/",
+    }
+
+
+def _dashboard_resolve_icon_url(raw_url: str, fallback_url: str) -> str:
+    url = (raw_url or "").strip()
+    legacy_icon_urls = {
+        "/powerbuddy/favicon-32x32.png",
+        "/powerbuddy/favicon.ico",
+        "/powerbuddy/apple-touch-icon.png",
+    }
+    if url and url not in legacy_icon_urls and not url.startswith("/media/"):
+        return url
+    return fallback_url
+
+
+def _dashboard_apply_runtime_state(html: str) -> str:
+    is_paused = not scheduler.is_execution_enabled()
+
+    if is_paused:
+        html = html.replace('data-is-paused="0"', 'data-is-paused="1"')
+        html = re.sub(
+            r'(id="priceChart"\s+class="[^"]*?)(?<!\bis-paused)(")',
+            r'\1 is-paused\2',
+            html,
+            count=1,
+        )
+    else:
+        html = html.replace('data-is-paused="1"', 'data-is-paused="0"')
+        html = re.sub(r'\s+is-paused(?=[^"]*"\s+id="priceChart")', '', html, count=1)
+
+    return html
+
+
+def _dashboard_apply_auth_state(html: str, *, authorized: bool) -> str:
+    if authorized:
+        return html
+
+    # Disable battery link target for non-authorized sessions.
+    # Frontend JS only binds click handlers when data-battery-link is non-empty.
+    return re.sub(
+        r'(<div[^>]*id="pbBatteryStat"[^>]*\sdata-battery-link=")[^"]*(")',
+        r'\1\2',
+        html,
+        count=1,
+    )
+
+
+def _dashboard_apply_mode_state(html: str, pb_mode: str) -> str:
+    mode = (pb_mode or "").strip().lower()
+    is_overview = mode == "overview"
+
+    html = re.sub(
+        r'(id="priceChart"[^>]*\sdata-overview-mode=")[^"]*(")',
+        rf'\g<1>{"1" if is_overview else "0"}\g<2>',
+        html,
+        count=1,
+    )
+
+    def _normalize_chart_classes(classes_text: str) -> str:
+        classes = [c for c in (classes_text or "").split() if c and c != "overview-mode"]
+        if is_overview:
+            classes.append("overview-mode")
+        return " ".join(classes)
+
+    def _patch_price_chart_class_id_first(match: re.Match[str]) -> str:
+        classes_text = match.group(1) or ""
+        classes = _normalize_chart_classes(classes_text)
+        return f'id="priceChart" class="{classes}"'
+
+    def _patch_price_chart_class_class_first(match: re.Match[str]) -> str:
+        classes = [c for c in (match.group(1) or "").split() if c and c != "overview-mode"]
+        if is_overview:
+            classes.append("overview-mode")
+        return f'class="{" ".join(classes)}" id="priceChart"'
+
+    html = re.sub(
+        r'id="priceChart"\s+class="([^"]*)"',
+        _patch_price_chart_class_id_first,
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'class="([^"]*)"\s+id="priceChart"',
+        _patch_price_chart_class_class_first,
+        html,
+        count=1,
+    )
+
+    if is_overview:
+        # ORG behavior: overview mode does not only hide header/hero with CSS,
+        # it removes that markup from the rendered HTML before the chart block.
+        html = re.sub(
+            r'(<div class="page">\s*)(<div class="header">[\s\S]*?)(?=<div class="chart-container)',
+            r'\1',
+            html,
+            count=1,
+        )
+        html = re.sub(r'(<body\b[^>]*class=")([^"]*)(")', r'\1\2 overview-mode\3', html, count=1)
+    else:
+        html = re.sub(r'(<body\b[^>]*class=")([^"]*)\boverview-mode\b([^\"]*)(")', r'\1\2\3\4', html, count=1)
+    html = re.sub(r'(<body\b[^>]*class=")\s+', r'\1', html, count=1)
+    html = re.sub(r'\s{2,}', ' ', html)
+    return html
+
+
+def _dashboard_slot_key(dt: datetime) -> str:
+    return _naive_ts(dt).strftime("%Y-%m-%dT%H.%M.%S")
+
+
+def _dashboard_action_icon_svg(action_name: str) -> str:
+    action = (action_name or "").lower()
+    if action == "charge":
+        return '<svg viewBox="0 0 16 16"><path d="M8 13V3"></path><path d="M4.5 6.5L8 3l3.5 3.5"></path></svg>'
+    if action == "discharge":
+        return '<svg viewBox="0 0 16 16"><path d="M8 3v10"></path><path d="M4.5 9.5L8 13l3.5-3.5"></path></svg>'
+    if action == "hold":
+        return '<svg viewBox="0 0 16 16"><path d="M6 3v10"></path><path d="M10 3v10"></path></svg>'
+    return '<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"></path><path d="M4.1 1.8V4h2.2"></path><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"></path><path d="M11.9 14.2V12h-2.2"></path></svg>'
+
+
+def _dashboard_action_label(action_name: str) -> str:
+    action = (action_name or "").lower()
+    if action == "charge":
+        return "Charge"
+    if action == "discharge":
+        return "Discharge"
+    if action == "hold":
+        return "Hold"
+    return "Auto"
+
+
+def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
+    action_map = {
+        _dashboard_slot_key(action.start_time): (str(action.action), str(action.id))
+        for action in actions
+    }
+    now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    current_hour = now_local.replace(minute=0, second=0, microsecond=0)
+    current_action_name = "auto"
+    current_slot_key = now_local.strftime("%Y-%m-%dT%H.00.00")
+    for action in actions:
+        start = _naive_ts(action.start_time)
+        end = _naive_ts(action.end_time)
+        if start <= now_local < end:
+            current_action_name = str(action.action or "auto").lower()
+            current_slot_key = _dashboard_slot_key(action.start_time)
+            break
+
+    current_category = "medium"
+    current_price_kr: float | None = None
+
+    # Keep dashboard aligned with live behavior by hiding already passed bars for today.
+    # This ensures the visible series starts at the current hour slot.
+    bar_block_re = re.compile(
+        r'<div class="bar-wrapper[^>]*data-start-time="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
+        re.S,
+    )
+
+    def _keep_visible_bar(match: re.Match[str]) -> str:
+        slot_text = (match.group(1) or "").strip()
+        try:
+            slot_dt = datetime.strptime(slot_text, "%Y-%m-%dT%H.%M.%S")
+        except Exception:
+            return match.group(0)
+        if slot_dt.date() == current_hour.date() and slot_dt < current_hour:
+            return ""
+        return match.group(0)
+
+    html = bar_block_re.sub(_keep_visible_bar, html)
+
+    # Recalculate price categories from visible bars using ORG quartile logic
+    # (same as CSHTML GetPriceCategory over price_without_fees_ore_per_kwh).
+    price_tag_re = re.compile(r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>')
+    price_values: list[float] = []
+    for match in price_tag_re.finditer(html):
+        try:
+            value = float(match.group(1))
+        except Exception:
+            continue
+        if value > 0:
+            price_values.append(value)
+
+    threshold1 = threshold2 = threshold3 = 0.0
+    if price_values:
+        price_values.sort()
+        min_price = price_values[0]
+        max_price = price_values[-1]
+        price_range = max(0.0, max_price - min_price)
+        threshold1 = min_price + (price_range * 0.25)
+        threshold2 = min_price + (price_range * 0.50)
+        threshold3 = min_price + (price_range * 0.75)
+
+        def _price_category(value: float) -> str:
+            if value <= threshold1:
+                return "low"
+            if value <= threshold2:
+                return "medium"
+            if value <= threshold3:
+                return "high"
+            return "peak"
+
+        category_block_re = re.compile(
+            r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
+            re.S,
+        )
+
+        def _patch_category_block(match: re.Match[str]) -> str:
+            block = match.group(0)
+            try:
+                price_value = float(match.group(1))
+            except Exception:
+                return block
+            category = _price_category(price_value)
+            block = re.sub(r'data-category="[^"]*"', f'data-category="{category}"', block, count=1)
+            block = re.sub(r'(<div class="bar\s+)[^"]+("\s+style=)', rf'\1{category}\2', block, count=1)
+            return block
+
+        html = category_block_re.sub(_patch_category_block, html)
+
+    bar_block_with_price_re = re.compile(
+        r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
+        re.S,
+    )
+    bar_blocks = list(bar_block_with_price_re.finditer(html))
+    if bar_blocks:
+        min_index: int | None = None
+        max_index: int | None = None
+        min_price: float | None = None
+        max_price: float | None = None
+
+        for idx, block_match in enumerate(bar_blocks):
+            try:
+                price_value = float(block_match.group(1))
+            except Exception:
+                continue
+            if min_price is None or price_value < min_price:
+                min_price = price_value
+                min_index = idx
+            if max_price is None or price_value > max_price:
+                max_price = price_value
+                max_index = idx
+
+        replacement_by_index: dict[int, str] = {}
+        for idx, block_match in enumerate(bar_blocks):
+            block = block_match.group(0)
+            # Reset static template flags before reapplying to live cheapest/most-expensive bars.
+            block = re.sub(
+                r'\s*<span class="bar-flag\s+(?:low|peak)">(?:Billigste|Dyreste)</span>\s*',
+                '\n',
+                block,
+            )
+            if min_index is not None and idx == min_index:
+                block = re.sub(
+                    r'(<span class="bar-value">)',
+                    r'<span class="bar-flag low">Billigste</span>\n\t\t\t\t\t\t\t\t\1',
+                    block,
+                    count=1,
+                )
+            if max_index is not None and idx == max_index:
+                block = re.sub(
+                    r'(<span class="bar-value">)',
+                    r'<span class="bar-flag peak">Dyreste</span>\n\t\t\t\t\t\t\t\t\1',
+                    block,
+                    count=1,
+                )
+            replacement_by_index[idx] = block
+
+        rebuilt_html_parts: list[str] = []
+        cursor = 0
+        for idx, block_match in enumerate(bar_blocks):
+            start, end = block_match.span()
+            rebuilt_html_parts.append(html[cursor:start])
+            rebuilt_html_parts.append(replacement_by_index.get(idx, block_match.group(0)))
+            cursor = end
+        rebuilt_html_parts.append(html[cursor:])
+        html = "".join(rebuilt_html_parts)
+
+    wrapper_re = re.compile(r'<div class="bar-wrapper[^>]*>')
+
+    def _patch_wrapper(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        slot_match = re.search(r'data-start-time="([^"]+)"', tag)
+        if not slot_match:
+            return tag
+
+        slot = slot_match.group(1)
+        mapped = action_map.get(slot)
+        if not mapped:
+            return tag
+
+        action_name, action_id = mapped
+        tag = re.sub(r'data-action="[^"]*"', f'data-action="{action_name}"', tag)
+        tag = re.sub(r'data-action-id="[^"]*"', f'data-action-id="{action_id}"', tag)
+        return tag
+
+    html = wrapper_re.sub(_patch_wrapper, html)
+
+    for slot, mapped in action_map.items():
+        action_name, _ = mapped
+        label = _dashboard_action_label(action_name)
+        icon_svg = _dashboard_action_icon_svg(action_name)
+
+        slot_pattern = re.compile(
+            rf'(<div class="bar-wrapper[^>]*data-start-time="{re.escape(slot)}"[^>]*>.*?<span class="bar-action-icon )[^\"]+(" title="PowerBuddy: )[^\"]+(" aria-hidden="true">\s*)<svg viewBox="0 0 16 16">.*?</svg>',
+            re.S,
+        )
+        html = slot_pattern.sub(
+            rf'\1{action_name}\2{label}\3{icon_svg}',
+            html,
+            count=1,
+        )
+
+    slot_meta_pattern = re.compile(
+        rf'<div class="bar-wrapper(?=[^>]*data-start-time="{re.escape(current_slot_key)}")(?=[^>]*data-category="([^"]+)")(?=[^>]*data-price="([^"]+)")[^>]*>',
+        re.S,
+    )
+    slot_meta = slot_meta_pattern.search(html)
+    if slot_meta:
+        current_category = (slot_meta.group(1) or "medium").strip().lower()
+        try:
+            current_price_kr = float(slot_meta.group(2)) / 100.0
+        except Exception:
+            current_price_kr = None
+
+    if current_price_kr is not None:
+        current_price_text = f"{current_price_kr:.2f}".replace(".", ",")
+        html = re.sub(
+            r'(<div class="hero-price">)[^<]*(</div>)',
+            rf'\g<1>{current_price_text} kr\g<2>',
+            html,
+            count=1,
+        )
+        html = re.sub(
+            r'(id="priceChart"[^>]*\sdata-current-price=")[^"]*(")',
+            rf'\g<1>{current_price_kr:.4f}\g<2>',
+            html,
+            count=1,
+        )
+
+    alert_by_category = {
+        "low": ("alert-success", "Lav pris - god tid at bruge strøm"),
+        "medium": ("alert-info", "Fornuftig pris - helt ok"),
+        "high": ("alert-warning", "Høj pris - spar hvis muligt"),
+        "peak": ("alert-danger", "Meget høj pris - vent hvis muligt"),
+    }
+    alert_class, alert_text = alert_by_category.get(current_category, alert_by_category["medium"])
+    alert_icon_by_category = {
+        "low": ("check-circle-fill", "Success:"),
+        "medium": ("info-fill", "Info:"),
+        "high": ("exclamation-triangle-fill", "Warning:"),
+        "peak": ("stop-fill", "Danger:"),
+    }
+    alert_icon_id, alert_icon_label = alert_icon_by_category.get(current_category, alert_icon_by_category["medium"])
+
+    def _replace_now_alert_class(match: re.Match[str]) -> str:
+        classes = (match.group(1) or "").split()
+        classes = [cls for cls in classes if not cls.startswith("alert-") or cls == "alert"]
+        if "alert" not in classes:
+            classes.insert(0, "alert")
+        if "pb-now-alert" not in classes:
+            classes.append("pb-now-alert")
+        classes.append(alert_class)
+        return f'<div class="{" ".join(classes)}" role="alert">'
+
+    html = re.sub(
+        r'<div class="([^"]*\bpb-now-alert\b[^"]*)" role="alert">',
+        _replace_now_alert_class,
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'(<div class="pb-now-alert-text">)[^<]*(</div>)',
+        rf'\1{alert_text}\2',
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'(<svg class="pb-now-alert-icon[^"]*"[\s\S]*?aria-label=")[^"]*(")',
+        rf'\1{alert_icon_label}\2',
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'(<use href=")[^"]*("\s+xlink:href=")[^"]*("></use>)',
+        rf'\1#{alert_icon_id}\2#{alert_icon_id}\3',
+        html,
+        count=1,
+    )
+
+    current_label = _dashboard_action_label(current_action_name)
+    html = re.sub(
+        r'(id="priceChart"[^>]*\sdata-current-action=")[^"]*(")',
+        rf'\1{current_action_name}\2',
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'(id="priceChart"[^>]*\sdata-current-start-time=")[^"]*(")',
+        rf'\1{current_slot_key}\2',
+        html,
+        count=1,
+    )
+    html = re.sub(
+        r'(id="priceChart"[^>]*\sdata-current-category=")[^"]*(")',
+        rf'\1{current_category}\2',
+        html,
+        count=1,
+    )
+    if 'data-current-start-time="' not in html:
+        html = re.sub(
+            r'(<div class="chart-container[^>]*\sid="priceChart")',
+            rf'\1 data-current-start-time="{current_slot_key}"',
+            html,
+            count=1,
+        )
+    html = re.sub(
+        r'(<div class="hero-action-ribbon chart-action-ribbon\s+)[^"]+("\s+data-action=")[^"]+("\s+data-action-label=")[^"]+("[^>]*>\s*<span>)[^<]*(</span>)',
+        rf'\1{current_action_name}\2{current_action_name}\3{current_label}\4{current_label}\5',
+        html,
+        count=1,
+        flags=re.S,
+    )
+    return html
+
+
+def _dashboard_is_authorized(request: Request) -> bool:
+    ip = _request_ip(request)
+    if _dashboard_is_trusted_ip(ip):
+        return True
+
+    cookie_name = settings.dashboard_session_cookie
+    token = request.cookies.get(cookie_name, "")
+    return _dashboard_decode_token(token, ip)
+
+
+def _dashboard_has_login_session(request: Request) -> bool:
+    ip = _request_ip(request)
+    token = request.cookies.get(settings.dashboard_session_cookie, "")
+    return _dashboard_decode_token(token, ip)
 
 
 async def _discover_battery_capacity() -> None:
@@ -88,7 +626,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.3",
+    version="1.0.5",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -117,6 +655,82 @@ if _origins:
     )
 
 
+static_dir = Path(__file__).resolve().parent / "static"
+if static_dir.exists():
+    app.mount("/dashboard/static", StaticFiles(directory=static_dir), name="dashboard-static")
+    app.mount("/powerbuddy/static", StaticFiles(directory=static_dir), name="powerbuddy-static")
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    css_dir = static_dir / "css"
+    if css_dir.exists():
+        app.mount("/css", StaticFiles(directory=css_dir), name="css")
+
+    scripts_dir = static_dir / "scripts"
+    if scripts_dir.exists():
+        app.mount("/scripts", StaticFiles(directory=scripts_dir), name="scripts")
+
+
+def _static_icon_response(file_name: str, media_type: str) -> FileResponse:
+    path = static_dir / file_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Icon not found")
+    return FileResponse(path, media_type=media_type)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.head("/favicon.ico", include_in_schema=False)
+def favicon_ico() -> FileResponse:
+    return _static_icon_response("favicon.ico", "image/x-icon")
+
+
+@app.get("/favicon-16x16.png", include_in_schema=False)
+@app.head("/favicon-16x16.png", include_in_schema=False)
+def favicon_16_png() -> FileResponse:
+    return _static_icon_response("favicon-16x16.png", "image/png")
+
+
+@app.get("/favicon-32x32.png", include_in_schema=False)
+@app.head("/favicon-32x32.png", include_in_schema=False)
+def favicon_32_png() -> FileResponse:
+    return _static_icon_response("favicon-32x32.png", "image/png")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+@app.head("/apple-touch-icon.png", include_in_schema=False)
+def apple_touch_icon_png() -> FileResponse:
+    return _static_icon_response("apple-touch-icon.png", "image/png")
+
+
+@app.get("/android-chrome-192x192.png", include_in_schema=False)
+@app.head("/android-chrome-192x192.png", include_in_schema=False)
+def android_chrome_192() -> FileResponse:
+    return _static_icon_response("android-chrome-192x192.png", "image/png")
+
+
+@app.get("/android-chrome-512x512.png", include_in_schema=False)
+@app.head("/android-chrome-512x512.png", include_in_schema=False)
+def android_chrome_512() -> FileResponse:
+    return _static_icon_response("android-chrome-512x512.png", "image/png")
+
+
+@app.get("/favicon-64x64.png", include_in_schema=False)
+@app.head("/favicon-64x64.png", include_in_schema=False)
+def favicon_64_png() -> FileResponse:
+    return _static_icon_response("favicon-64x64.png", "image/png")
+
+
+@app.get("/favicon-96x96.png", include_in_schema=False)
+@app.head("/favicon-96x96.png", include_in_schema=False)
+def favicon_96_png() -> FileResponse:
+    return _static_icon_response("favicon-96x96.png", "image/png")
+
+
+@app.get("/mstile-150x150.png", include_in_schema=False)
+@app.head("/mstile-150x150.png", include_in_schema=False)
+def mstile_150() -> FileResponse:
+    return _static_icon_response("mstile-150x150.png", "image/png")
+
+
 @app.get("/", tags=["system"], summary="API root")
 def index() -> dict[str, object]:
     return {
@@ -136,6 +750,334 @@ def index() -> dict[str, object]:
             "/inverter/realtime",
         ],
     }
+
+
+@app.get("/dashboard", tags=["system"], summary="PowerBuddy dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request, secret: str | None = None) -> HTMLResponse:
+    if not settings.dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Dashboard disabled")
+
+    compat_action = (request.query_params.get("action") or "").strip().lower()
+    if compat_action == "planning-auth-status":
+        return JSONResponse(await dashboard_auth_status(request))
+    if compat_action == "inverter-realtime":
+        realtime = await inverter_realtime()
+        payload = realtime.model_dump()
+        payload["battery_capacity_kwh"] = float(settings.battery_capacity_kwh)
+        payload["battery_min_soc"] = float(settings.battery_min_soc)
+        payload["reserve_min_soc"] = float(settings.battery_min_soc)
+        payload.update(await get_easee_status())
+        return JSONResponse(jsonable_encoder(payload))
+    if compat_action:
+        return JSONResponse({"ok": False, "error": "unknown_action"}, status_code=400)
+
+    icon_url = _dashboard_resolve_icon_url(settings.dashboard_icon_url, "/powerbuddy/static/favicon-32x32.png")
+    favicon_url = _dashboard_resolve_icon_url(settings.dashboard_favicon_url, "/powerbuddy/static/favicon.ico")
+    apple_touch_icon_url = _dashboard_resolve_icon_url(
+        settings.dashboard_apple_touch_icon_url,
+        "/powerbuddy/static/apple-touch-icon.png",
+    )
+
+    secret_value = (secret or "").strip()
+    secret_is_valid = bool(
+        secret_value
+        and settings.dashboard_secret
+        and hmac.compare_digest(secret_value, settings.dashboard_secret)
+    )
+    is_authorized = _dashboard_has_login_session(request) or secret_is_valid
+
+    html = render_dashboard_html(
+        title="PowerBuddy",
+        icon_url=icon_url,
+        favicon_url=favicon_url,
+        apple_touch_icon_url=apple_touch_icon_url,
+    )
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    actions_today = await get_plan(target_date=today)
+    actions_tomorrow = await get_plan(target_date=today + timedelta(days=1))
+    html = _dashboard_apply_plan_state(html, [*actions_today, *actions_tomorrow])
+    html = _dashboard_apply_mode_state(html, request.query_params.get("pbMode", ""))
+    html = _dashboard_apply_runtime_state(html)
+    html = _dashboard_apply_auth_state(html, authorized=is_authorized)
+
+    response = HTMLResponse(content=html)
+    ip = _request_ip(request)
+    if secret_is_valid:
+        token = _dashboard_encode_token(ip)
+        response.set_cookie(
+            key=settings.dashboard_session_cookie,
+            value=token,
+            **_dashboard_cookie_options(request),
+        )
+
+    return response
+
+
+async def _dashboard_read_payload(request: Request) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+    else:
+        try:
+            raw = (await request.body()).decode("utf-8", "ignore")
+        except Exception:
+            raw = ""
+
+        if raw:
+            parsed = parse_qs(raw, keep_blank_values=True)
+            payload = {key: values[-1] if values else "" for key, values in parsed.items()}
+        else:
+            try:
+                form_data = await request.form()
+                payload = dict(form_data)
+            except Exception:
+                payload = {}
+    return payload
+
+
+def _dashboard_find_action_id_by_start_time(start_time_text: str) -> int | None:
+    raw = (start_time_text or "").strip()
+    if not raw:
+        return None
+
+    raw_norm = re.sub(r'T(\d{2})\.(\d{2})\.(\d{2})$', r'T\1:\2:\3', raw)
+    try:
+        parsed = datetime.fromisoformat(raw_norm.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+    if parsed.tzinfo is not None:
+        local_time = parsed.astimezone(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    else:
+        local_time = parsed
+
+    slot = local_time.replace(minute=0, second=0, microsecond=0)
+    for action in PlanRepository.get_plan(slot.date().isoformat()):
+        if _naive_ts(action.start_time) == slot:
+            return int(action.id)
+    return None
+
+
+@app.post("/dashboard", tags=["system"], summary="PowerBuddy dashboard compat actions")
+async def dashboard_compat_action(request: Request) -> JSONResponse:
+    if not settings.dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Dashboard disabled")
+
+    compat_action = (request.query_params.get("action") or "").strip().lower()
+    if not compat_action:
+        return JSONResponse({"ok": False, "error": "missing_action"}, status_code=400)
+
+    if compat_action == "planning-auth-login":
+        try:
+            return await dashboard_auth_login(request)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                return JSONResponse({"ok": False, "authorized": False, "error": "unauthorized"}, status_code=401)
+            raise
+
+    if compat_action == "planning-control":
+        if not _dashboard_is_authorized(request):
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+        payload = await _dashboard_read_payload(request)
+        command = str(payload.get("command") or "").strip().lower()
+        try:
+            if command == "pause":
+                result = await pause_execution()
+            elif command == "start":
+                result = await start_execution()
+            else:
+                return JSONResponse({"ok": False, "error": "invalid_command"}, status_code=400)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "control_failed"}, status_code=500)
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "isPaused": not bool(result.get("execution_enabled", True)),
+                "execution_mode": result.get("execution_mode"),
+            }
+        )
+
+    if compat_action == "planning-update":
+        if not _dashboard_is_authorized(request):
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+        payload = await _dashboard_read_payload(request)
+        next_action = str(payload.get("actionName") or payload.get("action") or "").strip().lower()
+        if next_action not in {"auto", "charge", "hold", "discharge"}:
+            return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
+
+        action_id_raw = str(payload.get("actionId") or "").strip()
+        action_id: int | None = None
+        if action_id_raw:
+            try:
+                action_id = int(action_id_raw)
+            except ValueError:
+                action_id = None
+        if action_id is None:
+            action_id = _dashboard_find_action_id_by_start_time(str(payload.get("startTime") or ""))
+        if action_id is None:
+            return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
+
+        try:
+            updated = await update_plan_action(
+                action_id,
+                PlanActionUpdateIn(action=next_action, reason="manual override (dashboard compat)"),
+            )
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                fallback_id = _dashboard_find_action_id_by_start_time(str(payload.get("startTime") or ""))
+                if fallback_id is None:
+                    return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
+                updated = await update_plan_action(
+                    fallback_id,
+                    PlanActionUpdateIn(action=next_action, reason="manual override (dashboard compat)"),
+                )
+            else:
+                detail = exc.detail if isinstance(exc.detail, str) else "update_failed"
+                return JSONResponse({"ok": False, "error": detail}, status_code=exc.status_code)
+
+        return JSONResponse({"ok": True, "id": updated.id, "action": updated.action})
+
+    return JSONResponse({"ok": False, "error": "unknown_action"}, status_code=400)
+
+
+@app.get("/dashboard/auth/status", tags=["system"], summary="Dashboard auth status")
+async def dashboard_auth_status(request: Request) -> dict[str, object]:
+    return {
+        "ok": True,
+        "authorized": _dashboard_is_authorized(request),
+        "ip": _request_ip(request),
+    }
+
+
+@app.post(
+    "/dashboard/auth/login",
+    tags=["system"],
+    summary="Dashboard login",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "password": {"type": "string", "description": "Dashboard password"},
+                            "txtLogin": {"type": "string", "description": "Legacy login field"},
+                        },
+                        "anyOf": [{"required": ["password"]}, {"required": ["txtLogin"]}],
+                    }
+                },
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "password": {"type": "string", "description": "Dashboard password"},
+                            "txtLogin": {"type": "string", "description": "Legacy login field"},
+                        },
+                    }
+                },
+            },
+        }
+    },
+)
+async def dashboard_auth_login(request: Request) -> JSONResponse:
+    if not settings.dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Dashboard disabled")
+
+    payload = await _dashboard_read_payload(request)
+    submitted_password = str(payload.get("password") or payload.get("txtLogin") or "").strip()
+
+    if not _dashboard_is_password_valid(submitted_password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+
+    ip = _request_ip(request)
+    token = _dashboard_encode_token(ip)
+    response = JSONResponse({"ok": True, "authorized": True})
+    response.set_cookie(
+        key=settings.dashboard_session_cookie,
+        value=token,
+        **_dashboard_cookie_options(request),
+    )
+    return response
+
+
+@app.post("/dashboard/auth/logout", tags=["system"], summary="Dashboard logout")
+async def dashboard_auth_logout() -> JSONResponse:
+    response = JSONResponse({"ok": True, "authorized": False})
+    response.delete_cookie(key=settings.dashboard_session_cookie, path="/")
+    return response
+
+
+@app.get("/dashboard/state", tags=["system"], summary="Dashboard aggregated state")
+async def dashboard_state(request: Request) -> dict[str, object]:
+    if not settings.dashboard_enabled:
+        raise HTTPException(status_code=404, detail="Dashboard disabled")
+
+    prices = await get_prices(hours=36)
+    realtime = await inverter_realtime()
+    execution = get_execution_status()
+    now_status = await get_current_plan_status()
+
+    now = datetime.now(ZoneInfo(settings.timezone))
+    today = now.date()
+    actions_today = await get_plan(target_date=today)
+
+    current_action = None
+    for action in actions_today:
+        start = _naive_ts(action.start_time)
+        end = _naive_ts(action.end_time)
+        if start <= now.replace(tzinfo=None) < end:
+            current_action = action.action
+            break
+
+    return {
+        "ok": True,
+        "authorized": _dashboard_is_authorized(request),
+        "realtime": realtime.model_dump(),
+        "ev": await get_easee_status(),
+        "execution": execution,
+        "plan_now": now_status.model_dump(),
+        "current_action": current_action,
+        "prices": [price.model_dump() for price in prices],
+    }
+
+
+@app.post("/dashboard/control", tags=["system"], summary="Dashboard execution control")
+async def dashboard_control(request: Request) -> dict[str, object]:
+    if not _dashboard_is_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    payload = await request.json()
+    command = str(payload.get("command") or "").strip().lower()
+    if command == "pause":
+        result = await pause_execution()
+    elif command == "start":
+        result = await start_execution()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid command")
+
+    return result
+
+
+@app.post("/dashboard/planning/action/{action_id}", tags=["planning"], summary="Dashboard update plan action")
+async def dashboard_update_plan_action(action_id: int, request: Request) -> PlanActionOut:
+    if not _dashboard_is_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    payload = await request.json()
+    action = str(payload.get("action") or "").strip().lower()
+    if action not in {"auto", "charge", "hold", "discharge"}:
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+    update_payload = PlanActionUpdateIn(action=action, reason="manual override (dashboard)")
+    return await update_plan_action(action_id, update_payload)
 
 
 async def _resolve_current_soc() -> float:

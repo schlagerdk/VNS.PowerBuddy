@@ -1,7 +1,7 @@
 # VNS.PowerBuddy
 
 <p align="left">
-  <img src="assets/powerbuddy-icon.svg" alt="PowerBuddy icon" width="56" />
+  <img src="src/powerbuddy/static/powerbuddy-icon.svg" alt="PowerBuddy icon" width="56" />
 </p>
 
 VNS.PowerBuddy is a backend service for smart battery and energy planning.
@@ -9,6 +9,18 @@ VNS.PowerBuddy is a backend service for smart battery and energy planning.
 GitHub About (short description):
 
 `Smart home battery optimizer with day-ahead planning, spot-price aware scheduling, and real-time inverter control.`
+
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/Overview.jpg" alt="PowerBuddy overview" width="49%" />
+  <img src="assets/screenshots/Planning.jpg" alt="PowerBuddy planning view" width="49%" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/Pause.jpg" alt="PowerBuddy pause confirmation" width="49%" />
+  <img src="assets/screenshots/Paused.jpg" alt="PowerBuddy paused state" width="49%" />
+</p>
 
 
 Core capabilities:
@@ -29,10 +41,12 @@ Core capabilities:
 - Stores prices, power snapshots, plans, and simulations in SQLite.
 - Supports manual plan overrides through the API.
 - Keeps existing day plans stable unless changed manually.
+- Includes a native FastAPI dashboard (`/dashboard`) for live overview, plan edits, and execution control.
+- Optional Easee EV charger integration with real-time charge state display.
 
 ## Compatibility
 
-This release (`v1.0.3`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.5`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -50,6 +64,8 @@ If you run a different hardware combination, validate in a test environment befo
 - `src/powerbuddy/repositories.py`: Data access layer.
 - `src/powerbuddy/main.py`: FastAPI application and endpoints.
 - `src/powerbuddy/services/scheduler.py`: Background jobs (price refresh, snapshots, execution).
+- `src/powerbuddy/dashboard_ui.py`: Dashboard HTML rendering and icon/asset injection.
+- `src/powerbuddy/services/easee.py`: Optional Easee EV charger integration (token auth, state polling, auto-discovery).
 
 ## Quick Start
 
@@ -105,6 +121,7 @@ Versioning:
 
 - `VERSION` is the release version.
 - `pyproject.toml`, `src/powerbuddy/__init__.py`, and the FastAPI app version should stay aligned.
+- Dashboard static assets are packaged from `src/powerbuddy/static/`, including nested `css/` and `scripts/` files.
 
 CI:
 
@@ -122,6 +139,24 @@ That means:
   - `/.venv` (runtime + packages)
   - `/data` (SQLite/data files)
   - `/.env` (configuration)
+
+### Apache Reverse Proxy Example
+
+If you want to expose the dashboard under a path like `/powerbuddy` behind Apache, use a reverse proxy to the local FastAPI service.
+
+Example:
+
+```apache
+# The main dashboard proxy also covers /powerbuddy/static/*.
+ProxyPass /powerbuddy http://127.0.0.1:8000/dashboard nocanon
+ProxyPassReverse /powerbuddy http://127.0.0.1:8000/dashboard
+```
+
+Notes:
+
+- No, you do not need one `ProxyPass` per dashboard sub-route. `ProxyPass /powerbuddy ...` already works like a wildcard for `/powerbuddy/*` and forwards those requests to `/dashboard/*`.
+- With the current setup in this README, the public dashboard assets and icons live under `/powerbuddy/static/...`, which Apache forwards to the app's internal `/dashboard/static/...` mount.
+- This keeps Apache config small and avoids separate icon or asset alias rules.
 
 ## API Overview
 
@@ -155,6 +190,13 @@ Selected endpoints:
 - `GET /execution/status`
 - `POST /execution/pause`
 - `POST /execution/start`
+- `GET /dashboard`
+- `GET /dashboard/state`
+- `GET /dashboard/auth/status`
+- `POST /dashboard/auth/login`
+- `POST /dashboard/auth/logout`
+- `POST /dashboard/control`
+- `POST /dashboard/planning/action/{action_id}`
 
 ## Runtime Configuration
 
@@ -162,6 +204,29 @@ Selected endpoints:
 - Runtime config is not updated through database writes or API config persistence.
 - Changes in `.env` require a service restart to take effect.
 - `.env` is local and should not be committed.
+
+Dashboard access configuration:
+
+- `POWERBUDDY_DASHBOARD_ENABLED`: enables or disables the native dashboard route.
+- `POWERBUDDY_DASHBOARD_SECRET`: optional quick-login secret (`/dashboard?secret=...`).
+- `POWERBUDDY_DASHBOARD_PASSWORDS`: comma-separated dashboard passwords.
+- `POWERBUDDY_DASHBOARD_TRUSTED_IPS`: comma-separated IPs with automatic access.
+- `POWERBUDDY_DASHBOARD_SESSION_COOKIE`: dashboard session cookie name.
+- `POWERBUDDY_DASHBOARD_SESSION_TTL_SECONDS`: dashboard session lifetime.
+- `POWERBUDDY_DASHBOARD_ICON_URL`, `POWERBUDDY_DASHBOARD_FAVICON_URL`, `POWERBUDDY_DASHBOARD_APPLE_TOUCH_ICON_URL`: icon asset paths. Leave empty to use packaged local defaults under `/powerbuddy/static/...`.
+
+Notes:
+
+- The battery overview link on the dashboard is only clickable for logged-in dashboard sessions.
+- `.env.example` documents the main runtime knobs; omitted keys continue to use code defaults from `src/powerbuddy/config.py`.
+
+Easee EV charger integration (optional):
+
+- `POWERBUDDY_EASEE_ENABLED`: enable Easee integration (`true`/`false`).
+- `POWERBUDDY_EASEE_BASE_URL`: Easee API base URL (default: `https://api.easee.com/api`).
+- `POWERBUDDY_EASEE_USERNAME`: Easee account username.
+- `POWERBUDDY_EASEE_PASSWORD`: Easee account password.
+- `POWERBUDDY_EASEE_CHARGER_ID`: specific charger ID, or leave empty for auto-discovery.
 
 Scheduler behavior:
 
@@ -206,5 +271,4 @@ Battery power limits:
 
 - Expanded tariff/fee handling.
 - Profit optimization based on export/import pricing.
-- UI/dashboard for charts and plan editing.
 - More inverter adapters (Deye, Huawei, Tesla Powerwall, others).

@@ -570,6 +570,78 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_CORS_ALLOW_CREDENTIALS",
     )
 
+    # Dashboard access control.
+    dashboard_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_DASHBOARD_ENABLED",
+    )
+    dashboard_secret: str = Field(
+        default="",
+        alias="POWERBUDDY_DASHBOARD_SECRET",
+    )
+    dashboard_passwords: str = Field(
+        default="",
+        alias="POWERBUDDY_DASHBOARD_PASSWORDS",
+    )
+    dashboard_trusted_ips: str = Field(
+        default="127.0.0.1,::1",
+        alias="POWERBUDDY_DASHBOARD_TRUSTED_IPS",
+    )
+    dashboard_session_cookie: str = Field(
+        default="powerbuddy_dashboard",
+        alias="POWERBUDDY_DASHBOARD_SESSION_COOKIE",
+    )
+    dashboard_session_ttl_seconds: int = Field(
+        default=86400,
+        alias="POWERBUDDY_DASHBOARD_SESSION_TTL_SECONDS",
+    )
+    dashboard_icon_url: str = Field(
+        default="/powerbuddy/static/favicon-32x32.png",
+        alias="POWERBUDDY_DASHBOARD_ICON_URL",
+    )
+    dashboard_favicon_url: str = Field(
+        default="/powerbuddy/static/favicon.ico",
+        alias="POWERBUDDY_DASHBOARD_FAVICON_URL",
+    )
+    dashboard_apple_touch_icon_url: str = Field(
+        default="/powerbuddy/static/apple-touch-icon.png",
+        alias="POWERBUDDY_DASHBOARD_APPLE_TOUCH_ICON_URL",
+    )
+
+    # Easee EV charger integration (optional).
+    easee_enabled: bool = Field(
+        default=False,
+        alias="POWERBUDDY_EASEE_ENABLED",
+    )
+    easee_base_url: str = Field(
+        default="https://api.easee.com/api",
+        alias="POWERBUDDY_EASEE_BASE_URL",
+    )
+    easee_username: str = Field(
+        default="",
+        alias="POWERBUDDY_EASEE_USERNAME",
+    )
+    easee_password: str = Field(
+        default="",
+        alias="POWERBUDDY_EASEE_PASSWORD",
+    )
+    easee_charger_id: str = Field(
+        default="",
+        alias="POWERBUDDY_EASEE_CHARGER_ID",
+    )
+    easee_timeout_seconds: int = Field(
+        default=10,
+        alias="POWERBUDDY_EASEE_TIMEOUT_SECONDS",
+    )
+    easee_poll_interval_seconds: int = Field(
+        default=20,
+        alias="POWERBUDDY_EASEE_POLL_INTERVAL_SECONDS",
+    )
+    easee_state_max_age_seconds: int = Field(
+        default=180,
+        alias="POWERBUDDY_EASEE_STATE_MAX_AGE_SECONDS",
+    )
+
     @staticmethod
     def _parse_kw_override(raw_value: str | float | int | None) -> float | None:
         if raw_value is None:
@@ -628,6 +700,14 @@ class Settings(BaseSettings):
     @property
     def default_charge_power_w(self) -> int:
         return int(round(self.max_charge_kw * 1000.0))
+
+    @property
+    def dashboard_password_list(self) -> list[str]:
+        return [item.strip() for item in self.dashboard_passwords.split(",") if item.strip()]
+
+    @property
+    def dashboard_trusted_ip_list(self) -> list[str]:
+        return [item.strip() for item in self.dashboard_trusted_ips.split(",") if item.strip()]
 
 
 settings = Settings()

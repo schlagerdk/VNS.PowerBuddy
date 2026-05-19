@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>PowerBuddy</title>
+
+    <!-- App Icons -->
+	<link rel="apple-touch-icon" sizes="180x180" href="/powerbuddy/static/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/powerbuddy/static/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
+	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
+
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260519m" />
+</head>
+<body class="">
+	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
+		<symbol id="check-circle-fill" viewBox="0 0 16 16">
+			<path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
+		</symbol>
+		<symbol id="info-fill" viewBox="0 0 16 16">
+			<path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/>
+		</symbol>
+		<symbol id="exclamation-triangle-fill" viewBox="0 0 16 16">
+			<path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+		</symbol>
+		<symbol id="stop-fill" viewBox="0 0 16 16">
+			<path d="M4.54.146A1.5 1.5 0 0 0 3.5.5l-3 3A1.5 1.5 0 0 0 0 4.56v6.88a1.5 1.5 0 0 0 .5 1.06l3 3a1.5 1.5 0 0 0 1.06.5h6.88a1.5 1.5 0 0 0 1.06-.5l3-3a1.5 1.5 0 0 0 .5-1.06V4.56a1.5 1.5 0 0 0-.5-1.06l-3-3a1.5 1.5 0 0 0-1.06-.5H4.56A1.5 1.5 0 0 0 4.54.146zM8 4.5a1 1 0 0 1 1 1V8a1 1 0 0 1-2 0V5.5a1 1 0 0 1 1-1zm0 7a1.1 1.1 0 1 1 0-2.2 1.1 1.1 0 0 1 0 2.2z"/>
+		</symbol>
+	</svg>
+	<div id="pullRefreshIndicator" class="pull-refresh-indicator" aria-hidden="true">
+		<span class="pull-refresh-arrow">↓</span>
+		<span id="pullRefreshText" class="pull-refresh-text">Træk ned for at opdatere</span>
+	</div>
+	<div class="page">
+			<div class="header">
+				<div class="brand">
+					<div id="logoRefresh" class="brand-icon is-refreshable" role="button" tabindex="0" title="Opdater siden" aria-label="Opdater siden">
+						<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+							<path d="M13 2L5 14H11L10 22L19 9H13V2Z" fill="#36D1A5"/>
+							<circle cx="17.5" cy="17.5" r="3.5" fill="#2EB6D4" fill-opacity="0.35"/>
+							<path d="M16.4 17.5L17.2 18.3L18.8 16.7" stroke="#CFF4FF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+						</svg>
+					</div>
+					<div>
+						<h1>PowerBuddy</h1>
+						<p>Pris- og energioverblik med PowerBuddy</p>
+					</div>
+				</div>
+			</div>
+
+
+			<div class="hero-section">
+				<div class="hero-layout">
+					<div class="hero-pane hero-pane-price">
+						<div class="current-hour">
+							<div class="hero-col">
+								<div class="hero-price-label">Pris Lige Nu</div>
+								<div class="hero-price">1,09 kr</div>
+									<div class="alert pb-now-alert alert-info d-flex align-items-center" role="alert">
+										<svg class="pb-now-alert-icon bi flex-shrink-0 me-2" role="img" aria-label="Info:">
+											<use href="#info-fill" xlink:href="#info-fill"></use>
+										</svg>
+										<div class="pb-now-alert-content">
+											<div class="pb-now-alert-text">Fornuftig pris - helt ok</div>
+										</div>
+									</div>
+								<div class="hero-energy-mobile ">
+									<span id="pbNetBadge" class="hero-energy-badge net net-export"><span class="badge-label">🔌 Net:</span> <span id="pbNetBadgeValue">&#x2191; 293 W</span></span>
+									<span class="hero-energy-badge solar"><span class="badge-label">☀️ Sol:</span> <span id="pbSolarBadgeValue">3,2 kW</span></span>
+									<span class="hero-energy-badge consumption"><span class="badge-label">⚡ Forbrug:</span> <span id="pbConsumptionBadgeValue">2,8 kW</span></span>
+									<span id="pbEvBadge" class="hero-energy-badge ev" style="display:none;"><span class="badge-label"><span class="pb-ev-car-icon" aria-hidden="true"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span><span>Bil:</span></span> <span id="pbEvBadgeValue">0,0 kW</span></span>
+									<span id="pbBatteryBadge" class="hero-energy-badge battery battery-idle"><span class="badge-label"><span id="pbBatteryLinkMobile" class="pb-battery-emoji" aria-hidden="true">🔋</span><span>Batteri:</span></span> <span id="pbBatteryBadgeSoc">100%</span> <span id="pbBatteryBadgeFlow" class="flow-note">Standby</span></span>
+								</div>
+							</div>
+						</div>
+					</div>
+					<div class="hero-pane-energy">
+						<div id="pbNetStat" class="hero-energy-stat net net-export">
+							<div class="hero-energy-stat-icon">🔌</div>
+							<div class="hero-energy-stat-label">Net</div>
+							<div id="pbNetValue" class="hero-energy-stat-value">&#x2191; 293 W</div>
+							<div id="pbNetMeta" class="hero-energy-stat-meta">S&#xE6;lger</div>
+						</div>
+						<div class="hero-energy-stat solar">
+							<div class="hero-energy-stat-icon">☀️</div>
+							<div class="hero-energy-stat-label">Solceller</div>
+							<div id="pbSolarValue" class="hero-energy-stat-value">3,2 kW</div>
+						</div>
+						<div class="hero-energy-stat consumption">
+							<div class="hero-energy-stat-icon">🏠</div>
+							<div class="hero-energy-stat-label">Forbrug</div>
+							<div id="pbConsumptionValue" class="hero-energy-stat-value">2,8 kW</div>
+							<div id="pbEvInline" class="hero-energy-stat-ev-inline" style="display:none;">
+								<span class="hero-energy-stat-ev-icon" aria-hidden="true"><span class="pb-ev-car-icon"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span></span>
+								<span id="pbEvInlineValue" class="hero-energy-stat-ev-value">0,0 kW</span>
+							</div>
+						</div>
+						<div id="pbBatteryStat" class="hero-energy-stat battery battery-idle" data-battery-link="local">
+							<div class="hero-energy-stat-icon"><span id="pbBatteryLinkDesktop" class="pb-battery-emoji" aria-hidden="true">🔋</span></div>
+							<div class="hero-energy-stat-label">Batteri</div>
+							<div id="pbBatteryValue" class="hero-energy-stat-value">100%</div>
+							<div id="pbBatteryMeta" class="hero-energy-stat-meta">Standby</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+		<div class="chart-container has-chart-ribbon show-24 is-paused" id="priceChart" data-overview-mode="0" data-is-paused="1" data-current-action="hold" data-current-category="medium" data-current-price="1.0922">
+			<div class="hero-action-ribbon chart-action-ribbon hold" data-action="hold" data-action-label="Hold" title="PowerBuddy handling i nuværende time">
+				<span>Hold</span>
+			</div>
+			<div class="chart-top no-chart-title">
+				<div class="range-toggle" role="group" aria-label="Vælg periode">
+					<button type="button" class="range-btn active" data-range="12">12t</button>
+					<button type="button" class="range-btn" data-range="32">I dag+I morgen</button>
+				</div>
+				<div class="chart-top-actions">
+					<button type="button" id="pbChartRunToggle" class="pb-chart-control-btn" data-command="start" title="Start PowerBuddy" aria-label="Start PowerBuddy" style=visibility:hidden;pointer-events:none;>
+						<span class="pb-icon" aria-hidden="true">
+							<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
+						</span>
+						<span>Pause</span>
+					</button>
+				</div>
+			</div>
+			<div id="pbChartPausedPanel" class="pb-chart-paused" style="display:flex;">
+				<div class="pb-chart-paused-icon" aria-hidden="true">
+					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
+				</div>
+				<div class="pb-chart-paused-title">PowerBuddy er pauset</div>
+				<div class="pb-chart-paused-copy">Start for at vise plan- og pristabel.</div>
+				<button type="button" id="pbChartStartBtn" class="pb-chart-start-btn" data-command="start" title="Start PowerBuddy" aria-label="Start PowerBuddy">
+					<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M5 3.5L12 8L5 12.5V3.5Z"></path></svg></span>
+					<span>Start PowerBuddy</span>
+				</button>
+			</div>
+			<div id="pbChartDataArea">
+			<div class="chart-scroll">
+				<div class="chart-bars">
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="0" data-category="medium" data-price="109.2250" data-action="hold" data-action-id="966" data-start-time="2026-05-19T16.00.00" data-hour-label="16.00">
+							<div class="bar medium" style="height: 42.8%;" aria-label="16.00 - 1,09 kr">
+								<span class="bar-value">1,09</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">16<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="1" data-category="high" data-price="132.2537" data-action="auto" data-action-id="967" data-start-time="2026-05-19T17.00.00" data-hour-label="17.00">
+							<div class="bar high" style="height: 60.1%;" aria-label="17.00 - 1,32 kr">
+								<span class="bar-value">1,32</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">17<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="2" data-category="high" data-price="148.3125" data-action="auto" data-action-id="968" data-start-time="2026-05-19T18.00.00" data-hour-label="18.00">
+							<div class="bar high" style="height: 72.2%;" aria-label="18.00 - 1,48 kr">
+								<span class="bar-value">1,48</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">18<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="3" data-category="peak" data-price="174.0687" data-action="auto" data-action-id="969" data-start-time="2026-05-19T19.00.00" data-hour-label="19.00">
+							<div class="bar peak" style="height: 91.6%;" aria-label="19.00 - 1,74 kr">
+								<span class="bar-value">1,74</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">19<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="4" data-category="peak" data-price="185.1775" data-action="auto" data-action-id="970" data-start-time="2026-05-19T20.00.00" data-hour-label="20.00">
+							<div class="bar peak" style="height: 100.0%;" aria-label="20.00 - 1,85 kr">
+									<span class="bar-flag peak">Dyreste</span>
+								<span class="bar-value">1,85</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">20<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="5" data-category="peak" data-price="167.1275" data-action="auto" data-action-id="971" data-start-time="2026-05-19T21.00.00" data-hour-label="21.00">
+							<div class="bar peak" style="height: 86.4%;" aria-label="21.00 - 1,67 kr">
+								<span class="bar-value">1,67</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">21<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="6" data-category="high" data-price="150.6675" data-action="auto" data-action-id="972" data-start-time="2026-05-19T22.00.00" data-hour-label="22.00">
+							<div class="bar high" style="height: 74.0%;" aria-label="22.00 - 1,51 kr">
+								<span class="bar-value">1,51</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">22<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper   is-action-editable" data-day="today" data-index="7" data-category="high" data-price="139.7837" data-action="auto" data-action-id="973" data-start-time="2026-05-19T23.00.00" data-hour-label="23.00">
+							<div class="bar high" style="height: 65.8%;" aria-label="23.00 - 1,40 kr">
+								<span class="bar-value">1,40</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">23<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow day-boundary is-action-editable" data-day="tomorrow" data-index="8" data-category="high" data-price="131.8550" data-action="hold" data-action-id="974" data-start-time="2026-05-20T00.00.00" data-hour-label="00.00">
+								<span class="day-boundary-badge">I MORGEN</span>
+							<div class="bar high" style="height: 59.8%;" aria-label="00.00 - 1,32 kr">
+								<span class="bar-value">1,32</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">00<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="9" data-category="high" data-price="123.5875" data-action="hold" data-action-id="975" data-start-time="2026-05-20T01.00.00" data-hour-label="01.00">
+							<div class="bar high" style="height: 53.6%;" aria-label="01.00 - 1,24 kr">
+								<span class="bar-value">1,24</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">01<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="10" data-category="medium" data-price="118.6737" data-action="hold" data-action-id="976" data-start-time="2026-05-20T02.00.00" data-hour-label="02.00">
+							<div class="bar medium" style="height: 49.9%;" aria-label="02.00 - 1,19 kr">
+								<span class="bar-value">1,19</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">02<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="11" data-category="high" data-price="119.6175" data-action="charge" data-action-id="977" data-start-time="2026-05-20T03.00.00" data-hour-label="03.00">
+							<div class="bar high" style="height: 50.6%;" aria-label="03.00 - 1,20 kr">
+								<span class="bar-value">1,20</span>
+							</div>
+								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
+								</span>
+							<div class="hour-label">03<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="12" data-category="medium" data-price="118.2538" data-action="charge" data-action-id="978" data-start-time="2026-05-20T04.00.00" data-hour-label="04.00">
+							<div class="bar medium" style="height: 49.6%;" aria-label="04.00 - 1,18 kr">
+								<span class="bar-value">1,18</span>
+							</div>
+								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
+								</span>
+							<div class="hour-label">04<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="13" data-category="high" data-price="123.5875" data-action="auto" data-action-id="979" data-start-time="2026-05-20T05.00.00" data-hour-label="05.00">
+							<div class="bar high" style="height: 53.6%;" aria-label="05.00 - 1,24 kr">
+								<span class="bar-value">1,24</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">05<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="14" data-category="high" data-price="136.5350" data-action="auto" data-action-id="980" data-start-time="2026-05-20T06.00.00" data-hour-label="06.00">
+							<div class="bar high" style="height: 63.4%;" aria-label="06.00 - 1,37 kr">
+								<span class="bar-value">1,37</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">06<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="15" data-category="high" data-price="142.5037" data-action="auto" data-action-id="981" data-start-time="2026-05-20T07.00.00" data-hour-label="07.00">
+							<div class="bar high" style="height: 67.9%;" aria-label="07.00 - 1,43 kr">
+								<span class="bar-value">1,43</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">07<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="16" data-category="high" data-price="130.9013" data-action="auto" data-action-id="982" data-start-time="2026-05-20T08.00.00" data-hour-label="08.00">
+							<div class="bar high" style="height: 59.1%;" aria-label="08.00 - 1,31 kr">
+								<span class="bar-value">1,31</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">08<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="17" data-category="medium" data-price="116.8613" data-action="auto" data-action-id="983" data-start-time="2026-05-20T09.00.00" data-hour-label="09.00">
+							<div class="bar medium" style="height: 48.6%;" aria-label="09.00 - 1,17 kr">
+								<span class="bar-value">1,17</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">09<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="18" data-category="medium" data-price="98.7763" data-action="hold" data-action-id="984" data-start-time="2026-05-20T10.00.00" data-hour-label="10.00">
+							<div class="bar medium" style="height: 34.9%;" aria-label="10.00 - 0,99 kr">
+								<span class="bar-value">0,99</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">10<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="19" data-category="low" data-price="85.4825" data-action="hold" data-action-id="985" data-start-time="2026-05-20T11.00.00" data-hour-label="11.00">
+							<div class="bar low" style="height: 24.9%;" aria-label="11.00 - 0,85 kr">
+								<span class="bar-value">0,85</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">11<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="20" data-category="low" data-price="74.7862" data-action="hold" data-action-id="986" data-start-time="2026-05-20T12.00.00" data-hour-label="12.00">
+							<div class="bar low" style="height: 16.9%;" aria-label="12.00 - 0,75 kr">
+								<span class="bar-value">0,75</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">12<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="21" data-category="low" data-price="57.8125" data-action="charge" data-action-id="987" data-start-time="2026-05-20T13.00.00" data-hour-label="13.00">
+							<div class="bar low" style="height: 10.0%;" aria-label="13.00 - 0,58 kr">
+								<span class="bar-value">0,58</span>
+							</div>
+								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
+								</span>
+							<div class="hour-label">13<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="22" data-category="low" data-price="52.3762" data-action="charge" data-action-id="988" data-start-time="2026-05-20T14.00.00" data-hour-label="14.00">
+							<div class="bar low" style="height: 10.0%;" aria-label="14.00 - 0,52 kr">
+									<span class="bar-flag low">Billigste</span>
+								<span class="bar-value">0,52</span>
+							</div>
+								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
+								</span>
+							<div class="hour-label">14<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="23" data-category="low" data-price="58.8775" data-action="hold" data-action-id="989" data-start-time="2026-05-20T15.00.00" data-hour-label="15.00">
+							<div class="bar low" style="height: 10.0%;" aria-label="15.00 - 0,59 kr">
+								<span class="bar-value">0,59</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">15<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="24" data-category="low" data-price="75.9162" data-action="hold" data-action-id="990" data-start-time="2026-05-20T16.00.00" data-hour-label="16.00">
+							<div class="bar low" style="height: 17.7%;" aria-label="16.00 - 0,76 kr">
+								<span class="bar-value">0,76</span>
+							</div>
+								<span class="bar-action-icon hold" title="PowerBuddy: Hold" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M6 3v10"/><path d="M10 3v10"/></svg>
+								</span>
+							<div class="hour-label">16<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="25" data-category="medium" data-price="108.3038" data-action="auto" data-action-id="991" data-start-time="2026-05-20T17.00.00" data-hour-label="17.00">
+							<div class="bar medium" style="height: 42.1%;" aria-label="17.00 - 1,08 kr">
+								<span class="bar-value">1,08</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">17<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="26" data-category="high" data-price="136.5437" data-action="auto" data-action-id="992" data-start-time="2026-05-20T18.00.00" data-hour-label="18.00">
+							<div class="bar high" style="height: 63.4%;" aria-label="18.00 - 1,37 kr">
+								<span class="bar-value">1,37</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">18<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="27" data-category="peak" data-price="155.2650" data-action="auto" data-action-id="993" data-start-time="2026-05-20T19.00.00" data-hour-label="19.00">
+							<div class="bar peak" style="height: 77.5%;" aria-label="19.00 - 1,55 kr">
+								<span class="bar-value">1,55</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">19<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="28" data-category="peak" data-price="171.8738" data-action="auto" data-action-id="994" data-start-time="2026-05-20T20.00.00" data-hour-label="20.00">
+							<div class="bar peak" style="height: 90.0%;" aria-label="20.00 - 1,72 kr">
+								<span class="bar-value">1,72</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">20<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="29" data-category="peak" data-price="169.4550" data-action="auto" data-action-id="995" data-start-time="2026-05-20T21.00.00" data-hour-label="21.00">
+							<div class="bar peak" style="height: 88.2%;" aria-label="21.00 - 1,69 kr">
+								<span class="bar-value">1,69</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">21<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="30" data-category="peak" data-price="155.1625" data-action="auto" data-action-id="996" data-start-time="2026-05-20T22.00.00" data-hour-label="22.00">
+							<div class="bar peak" style="height: 77.4%;" aria-label="22.00 - 1,55 kr">
+								<span class="bar-value">1,55</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">22<span class="hour-zero">:00</span></div>
+						</div>
+						<div class="bar-wrapper tomorrow  is-action-editable" data-day="tomorrow" data-index="31" data-category="high" data-price="144.3812" data-action="auto" data-action-id="997" data-start-time="2026-05-20T23.00.00" data-hour-label="23.00">
+							<div class="bar high" style="height: 69.3%;" aria-label="23.00 - 1,44 kr">
+								<span class="bar-value">1,44</span>
+							</div>
+								<span class="bar-action-icon auto" title="PowerBuddy: Auto" aria-hidden="true">
+										<svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg>
+								</span>
+							<div class="hour-label">23<span class="hour-zero">:00</span></div>
+						</div>
+				</div>
+			</div>
+			</div>
+		</div>
+
+
+	</div>
+	<div id="pbActionModal" class="pb-action-modal" aria-hidden="true">
+		<div class="pb-action-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbActionModalTitle">
+			<div class="pb-action-modal-head">
+				<div id="pbActionModalTitle" class="pb-action-modal-title">Rediger PowerBuddy handling</div>
+				<button id="pbActionModalClose" type="button" class="pb-action-modal-close" aria-label="Luk">&times;</button>
+			</div>
+			<div class="pb-action-modal-body">
+				<div class="pb-action-badges">
+					<div id="pbActionSlot" class="pb-action-slot">Tidspunkt: -</div>
+					<span id="pbCurrentActionChip" class="pb-current-action-chip auto">Auto</span>
+				</div>
+				<div id="pbActionModalStatus" class="pb-action-status"></div>
+
+				<div id="pbActionLoginPanel">
+					<form id="pbActionLoginForm" class="pb-login-form">
+						<input id="pbActionLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="Adgangskode" required />
+						<button id="pbActionLoginSubmit" type="submit" class="pb-login-submit">Login</button>
+					</form>
+				</div>
+
+				<div id="pbActionEditorPanel" style="display:none;">
+					<div class="pb-action-choices" role="radiogroup" aria-label="Vælg handling">
+						<button type="button" class="pb-action-choice" data-action="auto"><span class="pb-action-choice-icon"><svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg></span><span>Auto</span></button>
+						<button type="button" class="pb-action-choice" data-action="charge"><span class="pb-action-choice-icon">↑</span><span>Charge</span></button>
+						<button type="button" class="pb-action-choice" data-action="hold"><span class="pb-action-choice-icon">⏸</span><span>Hold</span></button>
+						<button type="button" class="pb-action-choice" data-action="discharge"><span class="pb-action-choice-icon">↓</span><span>Discharge</span></button>
+					</div>
+					<div id="pbActionRiskConfirm" class="pb-discharge-confirm" hidden aria-live="assertive">
+						<div id="pbActionRiskTitle" class="pb-discharge-confirm-title">Bekræft handling</div>
+						<div id="pbActionRiskText" class="pb-discharge-confirm-text">Er du sikker på, at du vil fortsætte med denne handling?</div>
+						<div class="pb-discharge-confirm-actions">
+							<button id="pbActionRiskCancel" type="button" class="pb-discharge-confirm-btn cancel">Annuller</button>
+							<button id="pbActionRiskContinue" type="button" class="pb-discharge-confirm-btn continue">Ja, bekræft</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<div id="pbControlConfirmModal" class="pb-action-modal pb-control-confirm-modal" aria-hidden="true">
+		<div class="pb-action-modal-card pb-control-confirm-card" role="dialog" aria-modal="true" aria-labelledby="pbControlConfirmTitle">
+			<div class="pb-action-modal-head pb-control-confirm-head">
+				<div class="pb-control-confirm-title-wrap">
+					<div class="pb-control-confirm-kicker">PowerBuddy styring</div>
+					<div id="pbControlConfirmTitle" class="pb-action-modal-title">Bekræft pause</div>
+				</div>
+				<button id="pbControlConfirmClose" type="button" class="pb-action-modal-close" aria-label="Luk">&times;</button>
+			</div>
+			<div class="pb-action-modal-body pb-control-confirm-body">
+				<div class="pb-control-confirm-hero">
+					<div class="pb-control-confirm-icon" aria-hidden="true">
+						<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
+					</div>
+					<div class="pb-control-confirm-copy">
+						<div id="pbControlConfirmText" class="pb-control-confirm-text">Er du sikker på, at du vil fortsætte?</div>
+					</div>
+				</div>
+				<div class="pb-action-badges pb-control-confirm-badges">
+					<div id="pbControlConfirmCategory" class="pb-action-slot">Aktuel time</div>
+					<span id="pbControlConfirmAction" class="pb-current-action-chip auto">Auto</span>
+					<span id="pbControlConfirmPrice" class="pb-control-confirm-price" hidden></span>
+				</div>
+				<div class="pb-control-confirm-actions">
+					<button id="pbControlConfirmCancel" type="button" class="pb-discharge-confirm-btn cancel">Annuller</button>
+					<button id="pbControlConfirmContinue" type="button" class="pb-control-confirm-btn continue">Ja, pause PowerBuddy</button>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260519m"></script>
+</body>
+</html>
+
+
