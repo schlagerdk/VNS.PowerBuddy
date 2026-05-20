@@ -292,7 +292,7 @@ def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
     current_category = "medium"
     current_price_kr: float | None = None
 
-    # Keep dashboard aligned with live behavior by hiding already passed bars for today.
+    # Keep dashboard aligned with live behavior by hiding already passed bars.
     # This ensures the visible series starts at the current hour slot.
     bar_block_re = re.compile(
         r'<div class="bar-wrapper[^>]*data-start-time="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
@@ -305,7 +305,7 @@ def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
             slot_dt = datetime.strptime(slot_text, "%Y-%m-%dT%H.%M.%S")
         except Exception:
             return match.group(0)
-        if slot_dt.date() == current_hour.date() and slot_dt < current_hour:
+        if slot_dt < current_hour:
             return ""
         return match.group(0)
 
