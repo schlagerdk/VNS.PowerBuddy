@@ -272,13 +272,16 @@ def _dashboard_action_label(action_name: str) -> str:
     return "Auto"
 
 
-def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
+def _dashboard_apply_plan_state(html: str, actions: list[PlanAction], prices: list[PriceOut]) -> str:
     action_map = {
         _dashboard_slot_key(action.start_time): (str(action.action), str(action.id))
         for action in actions
     }
     now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
     current_hour = now_local.replace(minute=0, second=0, microsecond=0)
+    tomorrow_start = current_hour.replace(hour=0) + timedelta(days=1)
+    window_end = tomorrow_start + timedelta(days=1)
+    local_tz = ZoneInfo(settings.timezone)
     current_action_name = "auto"
     current_slot_key = now_local.strftime("%Y-%m-%dT%H.00.00")
     for action in actions:
@@ -292,46 +295,32 @@ def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
     current_category = "medium"
     current_price_kr: float | None = None
 
-    # Keep dashboard aligned with live behavior by hiding already passed bars.
-    # This ensures the visible series starts at the current hour slot.
-    bar_block_re = re.compile(
-        r'<div class="bar-wrapper[^>]*data-start-time="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
-        re.S,
-    )
-
-    def _keep_visible_bar(match: re.Match[str]) -> str:
-        slot_text = (match.group(1) or "").strip()
-        try:
-            slot_dt = datetime.strptime(slot_text, "%Y-%m-%dT%H.%M.%S")
-        except Exception:
-            return match.group(0)
-        if slot_dt < current_hour:
-            return ""
-        return match.group(0)
-
-    html = bar_block_re.sub(_keep_visible_bar, html)
-
-    # Recalculate price categories from visible bars using ORG quartile logic
-    # (same as CSHTML GetPriceCategory over price_without_fees_ore_per_kwh).
-    price_tag_re = re.compile(r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>')
-    price_values: list[float] = []
-    for match in price_tag_re.finditer(html):
-        try:
-            value = float(match.group(1))
-        except Exception:
+    normalized_prices: dict[datetime, float] = {}
+    for point in prices:
+        ts = point.timestamp
+        if ts.tzinfo is not None:
+            ts_local = ts.astimezone(local_tz).replace(tzinfo=None)
+        else:
+            ts_local = ts
+        slot_local = ts_local.replace(minute=0, second=0, microsecond=0)
+        if slot_local < current_hour or slot_local >= window_end:
             continue
-        if value > 0:
-            price_values.append(value)
 
-    threshold1 = threshold2 = threshold3 = 0.0
-    if price_values:
-        price_values.sort()
-        min_price = price_values[0]
-        max_price = price_values[-1]
-        price_range = max(0.0, max_price - min_price)
-        threshold1 = min_price + (price_range * 0.25)
-        threshold2 = min_price + (price_range * 0.50)
-        threshold3 = min_price + (price_range * 0.75)
+        raw_price_ore = point.price_without_fees_ore_per_kwh
+        if raw_price_ore is None:
+            raw_price_ore = point.price_ore_per_kwh
+        normalized_prices[slot_local] = float(raw_price_ore)
+
+    slot_meta_by_key: dict[str, tuple[str, float]] = {}
+    sorted_slots = sorted(normalized_prices.keys())
+    if sorted_slots:
+        values = [normalized_prices[slot] for slot in sorted_slots]
+        min_value = min(values)
+        max_value = max(values)
+        value_range = max(0.0, max_value - min_value)
+        threshold1 = min_value + (value_range * 0.25)
+        threshold2 = min_value + (value_range * 0.50)
+        threshold3 = min_value + (value_range * 0.75)
 
         def _price_category(value: float) -> str:
             if value <= threshold1:
@@ -342,128 +331,94 @@ def _dashboard_apply_plan_state(html: str, actions: list[PlanAction]) -> str:
                 return "high"
             return "peak"
 
-        category_block_re = re.compile(
-            r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
-            re.S,
-        )
+        cheapest_slot = min(sorted_slots, key=lambda slot: normalized_prices[slot])
+        priciest_slot = max(sorted_slots, key=lambda slot: normalized_prices[slot])
+        bars: list[str] = []
+        previous_day: date | None = None
+        for idx, slot in enumerate(sorted_slots):
+            price_ore = normalized_prices[slot]
+            category = _price_category(price_ore)
+            slot_key = slot.strftime("%Y-%m-%dT%H.%M.%S")
+            action_name, action_id = action_map.get(slot_key, ("", ""))
+            action_label = _dashboard_action_label(action_name)
+            action_icon = _dashboard_action_icon_svg(action_name)
+            price_kr = price_ore / 100.0
+            price_text = f"{price_kr:.2f}".replace(".", ",")
+            hour_text = slot.strftime("%H")
+            hour_label = slot.strftime("%H.%M")
+            day_is_today = slot < tomorrow_start
+            day_class = "today" if day_is_today else "tomorrow"
 
-        def _patch_category_block(match: re.Match[str]) -> str:
-            block = match.group(0)
-            try:
-                price_value = float(match.group(1))
-            except Exception:
-                return block
-            category = _price_category(price_value)
-            block = re.sub(r'data-category="[^"]*"', f'data-category="{category}"', block, count=1)
-            block = re.sub(r'(<div class="bar\s+)[^"]+("\s+style=)', rf'\1{category}\2', block, count=1)
-            return block
+            is_day_boundary = previous_day is not None and slot.date() != previous_day
+            boundary_class = "day-boundary" if is_day_boundary else ""
+            boundary_badge = ""
+            if is_day_boundary:
+                if slot >= tomorrow_start:
+                    boundary_text = "I MORGEN"
+                else:
+                    boundary_text = slot.strftime("%d/%m")
+                boundary_badge = f'\n\t\t\t\t\t\t\t\t<span class="day-boundary-badge">{boundary_text}</span>'
 
-        html = category_block_re.sub(_patch_category_block, html)
+            if value_range <= 0.0:
+                height_percent = 55.0
+            else:
+                height_percent = 10.0 + (((price_ore - min_value) / value_range) * 90.0)
 
-    bar_block_with_price_re = re.compile(
-        r'<div class="bar-wrapper[^>]*data-price="([^"]+)"[^>]*>.*?<div class="hour-label">.*?</div>\s*</div>',
-        re.S,
-    )
-    bar_blocks = list(bar_block_with_price_re.finditer(html))
-    if bar_blocks:
-        min_index: int | None = None
-        max_index: int | None = None
-        min_price: float | None = None
-        max_price: float | None = None
+            flag_html = ""
+            if slot == cheapest_slot:
+                flag_html += '\n\t\t\t\t\t\t\t\t\t<span class="bar-flag low">Billigste</span>'
+            if slot == priciest_slot:
+                flag_html += '\n\t\t\t\t\t\t\t\t\t<span class="bar-flag peak">Dyreste</span>'
 
-        for idx, block_match in enumerate(bar_blocks):
-            try:
-                price_value = float(block_match.group(1))
-            except Exception:
-                continue
-            if min_price is None or price_value < min_price:
-                min_price = price_value
-                min_index = idx
-            if max_price is None or price_value > max_price:
-                max_price = price_value
-                max_index = idx
+            action_icon_html = ""
+            editable_class = ""
+            if action_name:
+                editable_class = "is-action-editable"
+                action_icon_html = "\n".join(
+                    [
+                        f'\t\t\t\t\t\t\t<span class="bar-action-icon {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">',
+                        f"\t\t\t\t\t\t\t\t{action_icon}",
+                        "\t\t\t\t\t\t\t</span>",
+                    ]
+                )
 
-        replacement_by_index: dict[int, str] = {}
-        for idx, block_match in enumerate(bar_blocks):
-            block = block_match.group(0)
-            # Reset static template flags before reapplying to live cheapest/most-expensive bars.
-            block = re.sub(
-                r'\s*<span class="bar-flag\s+(?:low|peak)">(?:Billigste|Dyreste)</span>\s*',
-                '\n',
-                block,
+            bars.append(
+                "\n".join(
+                    [
+                        f'\t\t\t\t\t\t<div class="bar-wrapper {day_class} {boundary_class} {editable_class}" data-day="{day_class}" data-index="{idx}" data-category="{category}" data-price="{price_ore:.4f}" data-action="{action_name}" data-action-id="{action_id}" data-start-time="{slot_key}" data-hour-label="{hour_label}">',
+                        f"{boundary_badge}" if boundary_badge else "",
+                        f'\t\t\t\t\t\t\t<div class="bar {category}" style="height: {height_percent:.1f}%;" aria-label="{hour_label} - {price_text} kr">',
+                        f"{flag_html}" if flag_html else "",
+                        f'\t\t\t\t\t\t\t\t<span class="bar-value">{price_text}</span>',
+                        "\t\t\t\t\t\t\t</div>",
+                        f"{action_icon_html}" if action_icon_html else "",
+                        f'\t\t\t\t\t\t\t<div class="hour-label">{hour_text}<span class="hour-zero">:00</span></div>',
+                        "\t\t\t\t\t\t</div>",
+                    ]
+                )
             )
-            if min_index is not None and idx == min_index:
-                block = re.sub(
-                    r'(<span class="bar-value">)',
-                    r'<span class="bar-flag low">Billigste</span>\n\t\t\t\t\t\t\t\t\1',
-                    block,
-                    count=1,
-                )
-            if max_index is not None and idx == max_index:
-                block = re.sub(
-                    r'(<span class="bar-value">)',
-                    r'<span class="bar-flag peak">Dyreste</span>\n\t\t\t\t\t\t\t\t\1',
-                    block,
-                    count=1,
-                )
-            replacement_by_index[idx] = block
 
-        rebuilt_html_parts: list[str] = []
-        cursor = 0
-        for idx, block_match in enumerate(bar_blocks):
-            start, end = block_match.span()
-            rebuilt_html_parts.append(html[cursor:start])
-            rebuilt_html_parts.append(replacement_by_index.get(idx, block_match.group(0)))
-            cursor = end
-        rebuilt_html_parts.append(html[cursor:])
-        html = "".join(rebuilt_html_parts)
+            slot_meta_by_key[slot_key] = (category, price_kr)
+            previous_day = slot.date()
 
-    wrapper_re = re.compile(r'<div class="bar-wrapper[^>]*>')
-
-    def _patch_wrapper(match: re.Match[str]) -> str:
-        tag = match.group(0)
-        slot_match = re.search(r'data-start-time="([^"]+)"', tag)
-        if not slot_match:
-            return tag
-
-        slot = slot_match.group(1)
-        mapped = action_map.get(slot)
-        if not mapped:
-            return tag
-
-        action_name, action_id = mapped
-        tag = re.sub(r'data-action="[^"]*"', f'data-action="{action_name}"', tag)
-        tag = re.sub(r'data-action-id="[^"]*"', f'data-action-id="{action_id}"', tag)
-        return tag
-
-    html = wrapper_re.sub(_patch_wrapper, html)
-
-    for slot, mapped in action_map.items():
-        action_name, _ = mapped
-        label = _dashboard_action_label(action_name)
-        icon_svg = _dashboard_action_icon_svg(action_name)
-
-        slot_pattern = re.compile(
-            rf'(<div class="bar-wrapper[^>]*data-start-time="{re.escape(slot)}"[^>]*>.*?<span class="bar-action-icon )[^\"]+(" title="PowerBuddy: )[^\"]+(" aria-hidden="true">\s*)<svg viewBox="0 0 16 16">.*?</svg>',
-            re.S,
-        )
-        html = slot_pattern.sub(
-            rf'\1{action_name}\2{label}\3{icon_svg}',
+        bars_html = "\n".join(part for part in bars if part)
+        html = re.sub(
+            r'(<div class="chart-bars">\s*)([\s\S]*?)(\s*</div>\s*</div>\s*</div>)',
+            rf'\1\n{bars_html}\n\t\t\t\t\t\3',
             html,
             count=1,
         )
 
-    slot_meta_pattern = re.compile(
-        rf'<div class="bar-wrapper(?=[^>]*data-start-time="{re.escape(current_slot_key)}")(?=[^>]*data-category="([^"]+)")(?=[^>]*data-price="([^"]+)")[^>]*>',
-        re.S,
-    )
-    slot_meta = slot_meta_pattern.search(html)
-    if slot_meta:
-        current_category = (slot_meta.group(1) or "medium").strip().lower()
-        try:
-            current_price_kr = float(slot_meta.group(2)) / 100.0
-        except Exception:
-            current_price_kr = None
+    current_meta = slot_meta_by_key.get(current_slot_key)
+    if current_meta is not None:
+        current_category = current_meta[0]
+        current_price_kr = current_meta[1]
+    elif sorted_slots:
+        fallback_key = sorted_slots[0].strftime("%Y-%m-%dT%H.%M.%S")
+        fallback_meta = slot_meta_by_key.get(fallback_key)
+        if fallback_meta is not None:
+            current_category = fallback_meta[0]
+            current_price_kr = fallback_meta[1]
 
     if current_price_kr is not None:
         current_price_text = f"{current_price_kr:.2f}".replace(".", ",")
@@ -795,7 +750,8 @@ async def dashboard(request: Request, secret: str | None = None) -> HTMLResponse
     today = datetime.now(ZoneInfo(settings.timezone)).date()
     actions_today = await get_plan(target_date=today)
     actions_tomorrow = await get_plan(target_date=today + timedelta(days=1))
-    html = _dashboard_apply_plan_state(html, [*actions_today, *actions_tomorrow])
+    prices = await get_prices()
+    html = _dashboard_apply_plan_state(html, [*actions_today, *actions_tomorrow], prices)
     html = _dashboard_apply_mode_state(html, request.query_params.get("pbMode", ""))
     html = _dashboard_apply_runtime_state(html)
     html = _dashboard_apply_auth_state(html, authorized=is_authorized)
