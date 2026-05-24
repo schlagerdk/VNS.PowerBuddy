@@ -118,7 +118,7 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_HOLD_OVERRIDE_MIN_SURPLUS_W",
     )
     force_load_solar_aware_enabled: bool = Field(
-        default=True,
+        default=False,
         alias="POWERBUDDY_FORCE_LOAD_SOLAR_AWARE_ENABLED",
     )
     force_load_high_solar_pv_w_threshold: float = Field(
@@ -214,6 +214,18 @@ class Settings(BaseSettings):
     weather_forecast_enabled: bool = Field(default=True, alias="POWERBUDDY_WEATHER_FORECAST_ENABLED")
     weather_latitude: float = Field(default=55.6761, alias="POWERBUDDY_WEATHER_LATITUDE")
     weather_longitude: float = Field(default=12.5683, alias="POWERBUDDY_WEATHER_LONGITUDE")
+    # Optional PV geometry model. If enabled and arrays are valid, weather forecast
+    # factors are shaped by array kWp + azimuth/tilt. Fallback remains historical PV profile.
+    solar_site_declared_enabled: bool = Field(
+        default=False,
+        alias="POWERBUDDY_SOLAR_SITE_DECLARED_ENABLED",
+    )
+    # JSON format example:
+    # [{"kwp": 5.7, "azimuth_deg": 210, "tilt_deg": 30}, {"kwp": 7.3, "azimuth_deg": 300, "tilt_deg": 25}]
+    solar_arrays_json: str = Field(
+        default="",
+        alias="POWERBUDDY_SOLAR_ARRAYS_JSON",
+    )
 
     # How often (minutes) to re-fetch prices and possibly re-plan
     price_recheck_interval_minutes: int = Field(

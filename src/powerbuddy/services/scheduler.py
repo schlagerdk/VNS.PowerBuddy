@@ -65,6 +65,7 @@ class PowerBuddyScheduler:
         cursor_day = today
         while cursor_day < day:
             day_actions = PlanRepository.get_plan(cursor_day.isoformat())
+            day_actions = self._dedupe_effective_actions(day_actions)
             if not day_actions:
                 break
 
@@ -181,10 +182,19 @@ class PowerBuddyScheduler:
                 if not any(_overlaps(action, manual_action) for manual_action in manual_overrides)
             ]
         actions = frozen_actions + actions_future
-        actions, sanity_report = apply_planning_sanity(
+        actions_effective = sorted(
+            manual_overrides + actions,
+            key=lambda a: (
+                self._naive_ts(a.start_time),
+                0 if a.is_manual_override else 1,
+            ),
+        )
+        actions_effective = self._dedupe_effective_actions(actions_effective)
+
+        actions_effective, sanity_report = apply_planning_sanity(
             planner=self.planner,
             day=day,
-            actions=actions,
+            actions=actions_effective,
             prices=prices,
             start_soc=soc,
             tariff_ore_per_hour=tariff_24h,
@@ -193,10 +203,10 @@ class PowerBuddyScheduler:
         )
         if bool(sanity_report.get("auto_fix_applied")):
             logger.info("Planning sanity autofix adjusted %s action(s) for %s", sanity_report.get("changes"), day)
-        actions, variant_report = choose_best_plan_variant(
+        actions_effective, variant_report = choose_best_plan_variant(
             planner=self.planner,
             day=day,
-            actions=actions,
+            actions=actions_effective,
             prices=prices,
             start_soc=soc,
             tariff_ore_per_hour=tariff_24h,
@@ -209,8 +219,18 @@ class PowerBuddyScheduler:
                 variant_report.get("best_changes"),
                 variant_report.get("best_score_ore"),
             )
+        trimmed_effective_actions = self.planner.trim_redundant_charge_actions(
+            day=day,
+            actions=actions_effective,
+            start_soc=soc,
+            pv_weather_factor_24h=weather_factors,
+            price_points=prices,
+            tariff_ore_per_hour=tariff_24h,
+        )
+        actions = [a for a in trimmed_effective_actions if not a.is_manual_override]
         PlanRepository.replace_plan(day_key, actions)
         actions_for_simulation = PlanRepository.get_plan(day_key)
+        actions_for_simulation = self._dedupe_effective_actions(actions_for_simulation)
         if planning_start is not None:
             simulation_boundary = lock_end if lock_end is not None else planning_start
             actions_for_simulation = [
@@ -228,6 +248,18 @@ class PowerBuddyScheduler:
     @staticmethod
     def _naive_ts(ts: datetime) -> datetime:
         return ts.replace(tzinfo=None) if ts.tzinfo else ts
+
+    @classmethod
+    def _dedupe_effective_actions(cls, actions: list[PlanAction]) -> list[PlanAction]:
+        deduped: list[PlanAction] = []
+        seen_slots: set[datetime] = set()
+        for action in actions:
+            slot = cls._naive_ts(action.start_time).replace(minute=0, second=0, microsecond=0)
+            if slot in seen_slots:
+                continue
+            seen_slots.add(slot)
+            deduped.append(action)
+        return deduped
 
     def _convert_active_charge_block_to_hold(self, day_key: str, now_local: datetime) -> int:
         """

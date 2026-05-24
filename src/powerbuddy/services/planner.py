@@ -312,6 +312,7 @@ class DayPlanner:
             for idx in range(len(points))
         ]
         auto_expensive_threshold = 0.0
+        very_expensive_threshold = 0.0
         cheap_slot_threshold = 0.0
         cost_spread = 0.0
         if total_cost_levels:
@@ -321,6 +322,11 @@ class DayPlanner:
                 q_index = int(round((len(sorted_levels) - 1) * auto_expensive_quantile))
                 q_index = max(0, min(len(sorted_levels) - 1, q_index))
                 auto_expensive_threshold = sorted_levels[q_index]
+
+                very_q = max(auto_expensive_quantile, 0.85)
+                very_index = int(round((len(sorted_levels) - 1) * very_q))
+                very_index = max(0, min(len(sorted_levels) - 1, very_index))
+                very_expensive_threshold = sorted_levels[very_index]
             else:
                 auto_expensive_guard_enabled = False
 
@@ -403,6 +409,14 @@ class DayPlanner:
             idx for idx, level in enumerate(total_cost_levels)
             if cheap_slot_capture_enabled and level <= cheap_slot_threshold
         )
+        expensive_slot_indices: set[int] = set(
+            idx for idx, level in enumerate(total_cost_levels)
+            if auto_expensive_threshold > 0.0 and level >= auto_expensive_threshold
+        )
+        very_expensive_slot_indices: set[int] = set(
+            idx for idx, level in enumerate(total_cost_levels)
+            if very_expensive_threshold > 0.0 and level >= very_expensive_threshold
+        )
         future_soc_targets: list[int] = [reserve_soc for _ in range(len(points))]
         rolling_required_soc = reserve_soc
         for idx in range(len(points) - 1, -1, -1):
@@ -410,6 +424,17 @@ class DayPlanner:
             if required_here is not None:
                 rolling_required_soc = max(rolling_required_soc, required_here)
             future_soc_targets[idx] = rolling_required_soc
+
+        def _tie_break_priority(index: int, action_name: str) -> int:
+            if index in very_expensive_slot_indices:
+                order = {"auto": 0, "hold": 1, "charge": 2}
+            elif index in expensive_slot_indices:
+                order = {"auto": 0, "hold": 1, "charge": 2}
+            elif index in cheap_slot_indices:
+                order = {"charge": 0, "hold": 1, "auto": 2}
+            else:
+                order = {"hold": 0, "charge": 1, "auto": 2}
+            return order.get(action_name, 3)
 
         for t in range(len(points) - 1, -1, -1):
             price = points[t].price_ore_per_kwh
@@ -444,7 +469,7 @@ class DayPlanner:
                         scenario_base[t],
                         duration_hours=hour_durations[t],
                     )
-                    if action != "hold" and abs(delta_base) < eps:
+                    if action == "charge" and abs(delta_base) < eps:
                         continue
 
                     next_soc = self._next_soc(soc, delta_base)
@@ -512,7 +537,13 @@ class DayPlanner:
                         + dp[t + 1][next_soc]
                     )
 
-                    if total_cost < best_cost - eps or (abs(total_cost - best_cost) <= eps and action == "hold"):
+                    if (
+                        total_cost < best_cost - eps
+                        or (
+                            abs(total_cost - best_cost) <= eps
+                            and _tie_break_priority(t, action) < _tie_break_priority(t, best_action)
+                        )
+                    ):
                         best_cost = total_cost
                         best_action = action
 
@@ -562,7 +593,7 @@ class DayPlanner:
             )
             soc = next_soc
 
-        def _rebuild_actions_with_forced_charge(forced_indices: set[int], reason_prefix: str) -> list[PlanAction]:
+        def _rebuild_actions_with_forced_charge(forced_indices: set[int], reason_prefix: str) -> list[PlanAction] | None:
             rebuilt: list[PlanAction] = []
             soc_local = start_soc
             for idx, point in enumerate(points):
@@ -573,6 +604,8 @@ class DayPlanner:
                     scenario_base[idx],
                     duration_hours=hour_durations[idx],
                 )
+                if action_name == "charge" and abs(delta_battery_kwh) < eps:
+                    return None
                 next_soc_local = self._next_soc(soc_local, delta_battery_kwh)
 
                 target_soc_local = None
@@ -728,6 +761,8 @@ class DayPlanner:
                         forced,
                         "reserve precharge at cheap hour",
                     )
+                    if trial_actions is None:
+                        continue
                     if _soc_before_index(trial_actions, reserve_entry_index) >= reserve_soc:
                         updated_actions = trial_actions
                         break
@@ -927,6 +962,81 @@ class DayPlanner:
                     if not extended:
                         break
 
+            # Never keep hold in expensive slots: use auto when feasible.
+            if expensive_slot_indices:
+                expensive_hold_passes = max(1, len(actions))
+                for _ in range(expensive_hold_passes):
+                    converted = False
+                    for idx in sorted(expensive_slot_indices):
+                        if idx < 0 or idx >= len(actions):
+                            continue
+                        if actions[idx].action != "hold":
+                            continue
+
+                        trial_expensive_auto = _rebuild_actions_with_overrides(
+                            {idx: "auto"},
+                            "price-order normalization: avoid hold in expensive hour",
+                        )
+                        if _is_feasible_action_set(trial_expensive_auto):
+                            actions = trial_expensive_auto
+                            converted = True
+                            break
+
+                    if not converted:
+                        break
+
+        # Trim redundant consecutive charge blocks beyond what battery/SOC can absorb.
+        max_charge_trim_passes = max(1, len(actions))
+        for _ in range(max_charge_trim_passes):
+            trimmed = False
+            idx = 0
+            while idx < len(actions):
+                if actions[idx].action != "charge":
+                    idx += 1
+                    continue
+
+                block_start = idx
+                block_end = idx
+                while block_end + 1 < len(actions) and actions[block_end + 1].action == "charge":
+                    block_end += 1
+
+                block_indices = list(range(block_start, block_end + 1))
+                if len(block_indices) <= 1:
+                    idx = block_end + 1
+                    continue
+
+                soc_cursor = _soc_before_index(actions, block_start)
+                useful_count = 0
+                for charge_idx in block_indices:
+                    delta_battery_kwh, _grid_kwh, _throughput = self._transition(
+                        "charge",
+                        soc_cursor,
+                        scenario_base[charge_idx],
+                        duration_hours=hour_durations[charge_idx],
+                    )
+                    if abs(delta_battery_kwh) < eps:
+                        break
+                    useful_count += 1
+                    soc_cursor = self._next_soc(soc_cursor, delta_battery_kwh)
+                    if soc_cursor >= soc_max:
+                        break
+
+                redundant_indices = block_indices[useful_count:]
+                if redundant_indices:
+                    trial_trim = _rebuild_actions_with_overrides(
+                        {j: "hold" for j in redundant_indices},
+                        "price-order normalization: trimmed redundant charge block",
+                    )
+                    if _is_feasible_action_set(trial_trim):
+                        actions = trial_trim
+                        trimmed = True
+                        break
+
+                idx = block_end + 1
+
+            if not trimmed:
+                break
+
         return actions
 
 
@@ -1016,3 +1126,277 @@ class DayPlanner:
             )
 
         return points
+
+    def trim_redundant_charge_actions(
+        self,
+        day: date,
+        actions: list[PlanAction],
+        start_soc: float,
+        pv_weather_factor_24h: list[float] | None = None,
+        price_points: list[PricePoint] | None = None,
+        tariff_ore_per_hour: list[float] | None = None,
+    ) -> list[PlanAction]:
+        if not actions:
+            return actions
+
+        sorted_actions = sorted(actions, key=lambda a: a.start_time)
+
+        def _simulate(actions_input: list[PlanAction]) -> list[SimulationPoint]:
+            return self.simulate(
+                day,
+                actions_input,
+                start_soc=start_soc,
+                pv_weather_factor_24h=pv_weather_factor_24h,
+            )
+
+        def _clone_actions(actions_input: list[PlanAction]) -> list[PlanAction]:
+            return [
+                PlanAction(
+                    id=action.id,
+                    date_key=action.date_key,
+                    start_time=action.start_time,
+                    end_time=action.end_time,
+                    action=action.action,
+                    charge_power_w=action.charge_power_w,
+                    target_soc=action.target_soc,
+                    reason=action.reason,
+                    is_manual_override=action.is_manual_override,
+                )
+                for action in actions_input
+            ]
+
+        price_by_hour: dict[int, float] = {}
+        if price_points:
+            for point in price_points:
+                hour = self._local_hour(point.timestamp)
+                price_by_hour[hour] = float(point.price_ore_per_kwh)
+
+        def _slot_total_price_ore(hour: int) -> float:
+            price = float(price_by_hour.get(hour, 0.0))
+            tariff = 0.0
+            if tariff_ore_per_hour is not None and len(tariff_ore_per_hour) == 24 and 0 <= hour <= 23:
+                tariff = float(tariff_ore_per_hour[hour])
+            return price + tariff
+
+        def _plan_cost_ore(actions_input: list[PlanAction]) -> float:
+            if not price_by_hour:
+                return 0.0
+            sim = _simulate(actions_input)
+            total = 0.0
+            for point in sim:
+                hour = self._local_hour(point.timestamp)
+                grid_kwh = max(0.0, float(point.projected_grid_kwh))
+                total += self._cost_ore(grid_kwh, float(price_by_hour.get(hour, 0.0)), float(_slot_total_price_ore(hour) - price_by_hour.get(hour, 0.0)))
+            return total
+
+        simulation = _simulate(sorted_actions)
+        if not simulation:
+            return sorted_actions
+
+        soc_before = max(self.min_soc, min(self.max_soc, float(start_soc)))
+        trimmed = False
+        for idx, action in enumerate(sorted_actions):
+            if action.action != "charge" or action.is_manual_override:
+                if idx < len(simulation):
+                    soc_before = float(simulation[idx].projected_soc)
+                continue
+
+            soc_after = float(simulation[idx].projected_soc) if idx < len(simulation) else soc_before
+            if soc_after <= (soc_before + 0.05):
+                action.action = "hold"
+                action.charge_power_w = None
+                action.target_soc = None
+                action.reason = "price-order normalization: removed redundant charge hour"
+                trimmed = True
+
+            soc_before = soc_after
+
+        # If later charge hours (manual or planned) already recover SOC to the same
+        # level, trim earlier non-manual charge hours to avoid over-long charge blocks.
+        eps_soc = 0.1
+        relaxed_soc_tolerance_with_future_manual = 4.0
+        max_passes = max(1, len(sorted_actions))
+        for _ in range(max_passes):
+            baseline = _simulate(sorted_actions)
+            if not baseline:
+                break
+
+            baseline_end_soc = float(baseline[-1].projected_soc)
+            baseline_peak_soc = max(float(point.projected_soc) for point in baseline)
+
+            removed = False
+            for idx, action in enumerate(sorted_actions):
+                if action.action != "charge" or action.is_manual_override:
+                    continue
+
+                trial_actions = _clone_actions(sorted_actions)
+                trial_actions[idx].action = "hold"
+                trial_actions[idx].charge_power_w = None
+                trial_actions[idx].target_soc = None
+                trial_actions[idx].reason = "price-order normalization: removed redundant charge hour"
+
+                trial_sim = _simulate(trial_actions)
+                if not trial_sim:
+                    continue
+
+                trial_end_soc = float(trial_sim[-1].projected_soc)
+                trial_peak_soc = max(float(point.projected_soc) for point in trial_sim)
+
+                has_future_manual_charge = any(
+                    future_idx > idx and future_action.is_manual_override and future_action.action == "charge"
+                    for future_idx, future_action in enumerate(sorted_actions)
+                )
+                soc_tolerance = (
+                    relaxed_soc_tolerance_with_future_manual
+                    if has_future_manual_charge
+                    else eps_soc
+                )
+
+                if trial_end_soc + soc_tolerance >= baseline_end_soc and trial_peak_soc + soc_tolerance >= baseline_peak_soc:
+                    sorted_actions = trial_actions
+                    removed = True
+                    trimmed = True
+                    break
+
+            if not removed:
+                break
+
+        # Cost-first optimization:
+        # 1) Remove non-manual charge hours whenever total plan cost does not worsen.
+        # 2) Move remaining non-manual charge from pricier slots into cheaper hold slots
+        #    only when total plan cost improves.
+        if price_by_hour:
+            cost_eps = 1e-6
+            current_cost = _plan_cost_ore(sorted_actions)
+
+            remove_passes = max(1, len(sorted_actions) * 2)
+            for _ in range(remove_passes):
+                candidates = [
+                    idx
+                    for idx, action in enumerate(sorted_actions)
+                    if action.action == "charge" and not action.is_manual_override
+                ]
+                candidates = sorted(
+                    candidates,
+                    key=lambda idx: _slot_total_price_ore(self._local_hour(sorted_actions[idx].start_time)),
+                    reverse=True,
+                )
+
+                removed_any = False
+                for idx in candidates:
+                    trial_actions = _clone_actions(sorted_actions)
+                    trial_actions[idx].action = "hold"
+                    trial_actions[idx].charge_power_w = None
+                    trial_actions[idx].target_soc = None
+                    trial_actions[idx].reason = "economic optimization: removed non-essential charge hour"
+
+                    trial_cost = _plan_cost_ore(trial_actions)
+                    if trial_cost <= (current_cost + cost_eps):
+                        sorted_actions = trial_actions
+                        current_cost = trial_cost
+                        trimmed = True
+                        removed_any = True
+                        break
+
+                if not removed_any:
+                    break
+
+            shift_passes = max(1, len(sorted_actions))
+            for _ in range(shift_passes):
+                charge_candidates = [
+                    idx
+                    for idx, action in enumerate(sorted_actions)
+                    if action.action == "charge" and not action.is_manual_override
+                ]
+                hold_candidates = [
+                    idx
+                    for idx, action in enumerate(sorted_actions)
+                    if action.action == "hold" and not action.is_manual_override
+                ]
+
+                charge_candidates = sorted(
+                    charge_candidates,
+                    key=lambda idx: _slot_total_price_ore(self._local_hour(sorted_actions[idx].start_time)),
+                    reverse=True,
+                )
+                hold_candidates = sorted(
+                    hold_candidates,
+                    key=lambda idx: _slot_total_price_ore(self._local_hour(sorted_actions[idx].start_time)),
+                )
+
+                shifted_any = False
+                for charge_idx in charge_candidates:
+                    charge_hour = self._local_hour(sorted_actions[charge_idx].start_time)
+                    charge_cost = _slot_total_price_ore(charge_hour)
+                    for hold_idx in hold_candidates:
+                        if hold_idx == charge_idx:
+                            continue
+                        hold_hour = self._local_hour(sorted_actions[hold_idx].start_time)
+                        hold_cost = _slot_total_price_ore(hold_hour)
+                        if hold_cost >= charge_cost:
+                            continue
+
+                        trial_actions = _clone_actions(sorted_actions)
+                        trial_actions[charge_idx].action = "hold"
+                        trial_actions[charge_idx].charge_power_w = None
+                        trial_actions[charge_idx].target_soc = None
+                        trial_actions[charge_idx].reason = "economic optimization: moved charge to cheaper hour"
+
+                        trial_actions[hold_idx].action = "charge"
+                        trial_actions[hold_idx].charge_power_w = self.charge_setpoint_w
+                        trial_actions[hold_idx].reason = "economic optimization: moved charge to cheaper hour"
+
+                        trial_cost = _plan_cost_ore(trial_actions)
+                        if trial_cost + cost_eps < current_cost:
+                            sorted_actions = trial_actions
+                            current_cost = trial_cost
+                            trimmed = True
+                            shifted_any = True
+                            break
+
+                    if shifted_any:
+                        break
+
+                if not shifted_any:
+                    break
+
+        # Hard cap: never keep more non-manual charge hours than what battery room
+        # can physically absorb from start_soc (manual overrides are preserved).
+        per_hour_charge_kwh = max(0.0, self.max_charge_kwh * self.charge_efficiency)
+        if per_hour_charge_kwh > 1e-9:
+            import math
+
+            start_soc_clamped = max(self.min_soc, min(self.max_soc, float(start_soc)))
+            room_kwh = max(0.0, ((self.max_soc - start_soc_clamped) / 100.0) * self.capacity_kwh)
+            max_total_charge_hours = int(max(0, math.ceil(room_kwh / per_hour_charge_kwh)))
+
+            manual_charge_indices = [
+                idx
+                for idx, action in enumerate(sorted_actions)
+                if action.action == "charge" and action.is_manual_override
+            ]
+            non_manual_charge_indices = [
+                idx
+                for idx, action in enumerate(sorted_actions)
+                if action.action == "charge" and not action.is_manual_override
+            ]
+
+            allowed_non_manual = max(0, max_total_charge_hours - len(manual_charge_indices))
+            if len(non_manual_charge_indices) > allowed_non_manual:
+                keep_non_manual = set(
+                    sorted(
+                        non_manual_charge_indices,
+                        key=lambda idx: _slot_total_price_ore(self._local_hour(sorted_actions[idx].start_time)),
+                    )[:allowed_non_manual]
+                )
+
+                for idx in non_manual_charge_indices:
+                    if idx in keep_non_manual:
+                        continue
+                    sorted_actions[idx].action = "hold"
+                    sorted_actions[idx].charge_power_w = None
+                    sorted_actions[idx].target_soc = None
+                    sorted_actions[idx].reason = "economic optimization: capped charge hours to battery need"
+                    trimmed = True
+
+        return sorted_actions if trimmed else actions

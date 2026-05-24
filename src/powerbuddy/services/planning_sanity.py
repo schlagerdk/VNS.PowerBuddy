@@ -184,10 +184,17 @@ def apply_planning_sanity(
 
 	expensive_auto_count = sum(1 for idx in expensive_indices if actions[idx].action == "auto")
 	expensive_share = (expensive_auto_count / max(1, len(expensive_indices)))
+	expensive_hold_indices = [idx for idx in expensive_indices if actions[idx].action == "hold"]
 	min_auto_share = max(0.0, min(1.0, float(settings.planning_sanity_min_expensive_auto_share)))
 	if expensive_share + 1e-6 < min_auto_share:
 		findings.append(
 			f"Auto coverage in expensive window is low ({expensive_share:.2f} < target {min_auto_share:.2f})"
+		)
+
+	if expensive_hold_indices:
+		hours = [int(actions[idx].start_time.hour) for idx in expensive_hold_indices]
+		findings.append(
+			f"Hold is present in expensive window (hours: {hours})"
 		)
 
 	changes = 0
@@ -305,12 +312,9 @@ def apply_planning_sanity(
 		for idx in expensive_indices:
 			if actions[idx].action != "hold" or actions[idx].is_manual_override:
 				continue
-			soc_before_here = _soc_before(idx, start_soc, sim_soc)
-			if soc_before_here <= (reserve_soc + 2.0):
-				continue
 			actions[idx].action = "auto"
 			actions[idx].charge_power_w = None
-			actions[idx].reason = "sanity autofix: use auto in expensive window"
+			actions[idx].reason = "sanity autofix: avoid hold in expensive window"
 			changes += 1
 			sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
 

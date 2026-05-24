@@ -404,9 +404,12 @@ class FroniusClient(InverterClient):
             is_discharge = action in {"discharge", "discharge_force"}
             max_charge_w = int(max(0.0, float(settings.max_charge_kw) * 1000.0))
             max_discharge_w = max(0, int(settings.force_discharge_power_w))
-            force_load_power_w = max_charge_w
+            if charge_power_w is not None:
+                force_load_power_w = int(round(max(0.0, float(charge_power_w))))
+            else:
+                force_load_power_w = max_charge_w
 
-            if is_charge and settings.force_load_solar_aware_enabled:
+            if is_charge and charge_power_w is None and settings.force_load_solar_aware_enabled:
                 try:
                     realtime = await self.get_realtime()
                     pv_w = max(0.0, float(realtime.pv_power_w))
