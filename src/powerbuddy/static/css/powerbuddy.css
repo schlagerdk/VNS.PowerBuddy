@@ -216,6 +216,10 @@
 			cursor: pointer;
 		}
 
+		#pbBatteryStat .hero-energy-stat-label {
+			cursor: default;
+		}
+
 		.hero-energy-stat-icon {
 			font-size: 24px;
 			line-height: 1;

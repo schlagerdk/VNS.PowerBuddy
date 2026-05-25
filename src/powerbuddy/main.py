@@ -5,17 +5,19 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import hmac
+import ipaddress
 import logging
 import re
 import time
 from pathlib import Path
+from typing import Literal, TypedDict, cast
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from powerbuddy.config import set_detected_battery_capacity_kwh, settings
@@ -56,6 +58,14 @@ logger = logging.getLogger(__name__)
 scheduler = PowerBuddyScheduler()
 
 
+class DashboardCookieOptions(TypedDict):
+    httponly: bool
+    samesite: Literal["lax", "strict", "none"]
+    secure: bool
+    max_age: int
+    path: str
+
+
 def _request_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "").strip()
     if forwarded:
@@ -67,6 +77,36 @@ def _request_ip(request: Request) -> str:
     if client_host.startswith("::ffff:"):
         client_host = client_host[7:]
     return client_host
+
+
+def _request_ip_candidates(request: Request) -> list[str]:
+    candidates: list[str] = []
+
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        for part in forwarded.split(","):
+            ip_text = part.strip()
+            if ip_text.startswith("::ffff:"):
+                ip_text = ip_text[7:]
+            if ip_text:
+                candidates.append(ip_text)
+
+    for header_name in ("x-real-ip", "x-client-ip"):
+        value = (request.headers.get(header_name) or "").strip()
+        if value.startswith("::ffff:"):
+            value = value[7:]
+        if value:
+            candidates.append(value)
+
+    direct_ip = _request_ip(request)
+    if direct_ip:
+        candidates.append(direct_ip)
+
+    unique: list[str] = []
+    for ip_text in candidates:
+        if ip_text not in unique:
+            unique.append(ip_text)
+    return unique
 
 
 def _dashboard_signing_secret() -> bytes:
@@ -131,7 +171,7 @@ def _dashboard_decode_token(token: str, ip: str) -> bool:
         return False
 
 
-def _dashboard_cookie_options(request: Request) -> dict[str, object]:
+def _dashboard_cookie_options(request: Request) -> DashboardCookieOptions:
     max_age = max(60, int(settings.dashboard_session_ttl_seconds))
     forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
     secure = request.url.scheme == "https" or "https" in forwarded_proto
@@ -174,18 +214,53 @@ def _dashboard_apply_runtime_state(html: str) -> str:
     return html
 
 
-def _dashboard_apply_auth_state(html: str, *, authorized: bool) -> str:
-    if authorized:
-        return html
-
-    # Disable battery link target for non-authorized sessions.
-    # Frontend JS only binds click handlers when data-battery-link is non-empty.
+def _dashboard_apply_auth_state(html: str, *, authorized: bool, request: Request) -> str:
+    battery_link = _dashboard_resolve_battery_link(authorized=authorized, request=request)
     return re.sub(
         r'(<div[^>]*id="pbBatteryStat"[^>]*\sdata-battery-link=")[^"]*(")',
-        r'\1\2',
+        rf'\1{battery_link}\2',
         html,
         count=1,
     )
+
+
+def _dashboard_is_same_network(ip: str, host: str) -> bool:
+    ip_text = (ip or "").strip()
+    host_text = (host or "").strip()
+    if not ip_text or not host_text:
+        return False
+
+    try:
+        client_ip = ipaddress.ip_address(ip_text)
+        target_ip = ipaddress.ip_address(host_text)
+    except ValueError:
+        return False
+
+    if client_ip.version != target_ip.version:
+        return False
+
+    if client_ip == target_ip or client_ip.is_loopback:
+        return True
+
+    if client_ip.version == 4 and client_ip.is_private and target_ip.is_private:
+        network = ipaddress.ip_network(f"{target_ip}/24", strict=False)
+        return client_ip in network
+
+    return False
+
+
+def _dashboard_resolve_battery_link(*, authorized: bool, request: Request | None = None) -> str:
+    if not authorized:
+        return ""
+
+    host = (settings.modbus_host or "").strip()
+    if not host:
+        return "https://solarweb.com"
+
+    ip_candidates = _request_ip_candidates(request) if request is not None else []
+    if any(_dashboard_is_same_network(ip, host) for ip in ip_candidates):
+        return f"https://{host}"
+    return "https://solarweb.com"
 
 
 def _dashboard_apply_mode_state(html: str, pb_mode: str) -> str:
@@ -272,7 +347,11 @@ def _dashboard_action_label(action_name: str) -> str:
     return "Auto"
 
 
-def _dashboard_apply_plan_state(html: str, actions: list[PlanAction], prices: list[PriceOut]) -> str:
+def _dashboard_apply_plan_state(
+    html: str,
+    actions: list[PlanAction | PlanActionOut],
+    prices: list[PriceOut],
+) -> str:
     action_map = {
         _dashboard_slot_key(action.start_time): (str(action.action), str(action.id))
         for action in actions
@@ -708,7 +787,7 @@ def index() -> dict[str, object]:
 
 
 @app.get("/dashboard", tags=["system"], summary="PowerBuddy dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request, secret: str | None = None) -> HTMLResponse:
+async def dashboard(request: Request, secret: str | None = None) -> Response:
     if not settings.dashboard_enabled:
         raise HTTPException(status_code=404, detail="Dashboard disabled")
 
@@ -739,7 +818,7 @@ async def dashboard(request: Request, secret: str | None = None) -> HTMLResponse
         and settings.dashboard_secret
         and hmac.compare_digest(secret_value, settings.dashboard_secret)
     )
-    is_authorized = _dashboard_has_login_session(request) or secret_is_valid
+    is_authorized = _dashboard_is_authorized(request) or secret_is_valid
 
     html = render_dashboard_html(
         title="PowerBuddy",
@@ -754,7 +833,7 @@ async def dashboard(request: Request, secret: str | None = None) -> HTMLResponse
     html = _dashboard_apply_plan_state(html, [*actions_today, *actions_tomorrow], prices)
     html = _dashboard_apply_mode_state(html, request.query_params.get("pbMode", ""))
     html = _dashboard_apply_runtime_state(html)
-    html = _dashboard_apply_auth_state(html, authorized=is_authorized)
+    html = _dashboard_apply_auth_state(html, authorized=is_authorized, request=request)
 
     response = HTMLResponse(content=html)
     ip = _request_ip(request)
@@ -880,10 +959,11 @@ async def dashboard_compat_action(request: Request) -> JSONResponse:
         if action_id is None:
             return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
 
+        plan_action = cast(Literal["auto", "charge", "discharge", "hold", "discharge_force"], next_action)
         try:
             updated = await update_plan_action(
                 action_id,
-                PlanActionUpdateIn(action=next_action, reason="manual override (dashboard compat)"),
+                PlanActionUpdateIn(action=plan_action, reason="manual override (dashboard compat)"),
             )
         except HTTPException as exc:
             if exc.status_code == 404:
@@ -892,7 +972,7 @@ async def dashboard_compat_action(request: Request) -> JSONResponse:
                     return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
                 updated = await update_plan_action(
                     fallback_id,
-                    PlanActionUpdateIn(action=next_action, reason="manual override (dashboard compat)"),
+                    PlanActionUpdateIn(action=plan_action, reason="manual override (dashboard compat)"),
                 )
             else:
                 detail = exc.detail if isinstance(exc.detail, str) else "update_failed"
@@ -905,9 +985,11 @@ async def dashboard_compat_action(request: Request) -> JSONResponse:
 
 @app.get("/dashboard/auth/status", tags=["system"], summary="Dashboard auth status")
 async def dashboard_auth_status(request: Request) -> dict[str, object]:
+    authorized = _dashboard_is_authorized(request)
     return {
         "ok": True,
-        "authorized": _dashboard_is_authorized(request),
+        "authorized": authorized,
+        "battery_link": _dashboard_resolve_battery_link(authorized=authorized, request=request),
         "ip": _request_ip(request),
     }
 
@@ -955,7 +1037,13 @@ async def dashboard_auth_login(request: Request) -> JSONResponse:
 
     ip = _request_ip(request)
     token = _dashboard_encode_token(ip)
-    response = JSONResponse({"ok": True, "authorized": True})
+    response = JSONResponse(
+        {
+            "ok": True,
+            "authorized": True,
+            "battery_link": _dashboard_resolve_battery_link(authorized=True, request=request),
+        }
+    )
     response.set_cookie(
         key=settings.dashboard_session_cookie,
         value=token,
@@ -1032,7 +1120,8 @@ async def dashboard_update_plan_action(action_id: int, request: Request) -> Plan
     if action not in {"auto", "charge", "hold", "discharge"}:
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    update_payload = PlanActionUpdateIn(action=action, reason="manual override (dashboard)")
+    validated_action = cast(Literal["auto", "charge", "discharge", "hold", "discharge_force"], action)
+    update_payload = PlanActionUpdateIn(action=validated_action, reason="manual override (dashboard)")
     return await update_plan_action(action_id, update_payload)
 
 
@@ -1372,7 +1461,7 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
             target_soc = min(
                 float(settings.battery_max_soc),
                 max(
-                    float(settings.must_charge_min_soc_percent),
+                    float(settings.must_charge_window_min_soc_percent),
                     float(settings.reserve_soc_min_percent) + 20.0,
                     90.0,
                 ),

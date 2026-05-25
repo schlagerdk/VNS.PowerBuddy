@@ -1028,6 +1028,9 @@
 				const res = await fetch('?action=planning-auth-status', { cache: 'no-store' });
 				if (!res.ok) return false;
 				const data = await res.json();
+				if (data && typeof window.powerBuddyApplyBatteryLinkTarget === 'function') {
+					window.powerBuddyApplyBatteryLinkTarget(data.battery_link || '');
+				}
 				return !!(data && data.authorized);
 			}
 
@@ -1207,6 +1210,9 @@
 						});
 						const data = await res.json();
 						if (res.ok && data && data.ok && data.authorized) {
+							if (typeof window.powerBuddyApplyBatteryLinkTarget === 'function') {
+								window.powerBuddyApplyBatteryLinkTarget(data.battery_link || '');
+							}
 							loginPassword.value = '';
 							if (modalMode === 'control-login' && pendingControlCommand) {
 								const commandToRun = pendingControlCommand;
@@ -1737,32 +1743,62 @@
 				document.getElementById('pbBatteryLinkMobile')
 			].filter(Boolean);
 			if (!triggers.length) return;
-			const link = (batteryStat.getAttribute('data-battery-link') || '')
-				.replace(/"/g, '')
-				.trim()
-				.toLowerCase();
-			if (!link) {
+			let url = '';
+
+			function applyBatteryLinkTarget(nextLink) {
+				const link = String(nextLink || '')
+					.replace(/"/g, '')
+					.trim();
+				url = /^https?:\/\//i.test(link) ? link : '';
+
+				if (!url) {
+					triggers.forEach(function (trigger) {
+						trigger.style.cursor = 'default';
+						trigger.removeAttribute('role');
+						trigger.removeAttribute('tabindex');
+						trigger.removeAttribute('title');
+					});
+					return;
+				}
+
 				triggers.forEach(function (trigger) {
-					trigger.style.cursor = 'default';
-					trigger.removeAttribute('role');
-					trigger.removeAttribute('tabindex');
-					trigger.removeAttribute('title');
+					trigger.style.cursor = 'pointer';
+					trigger.setAttribute('role', 'button');
+					trigger.setAttribute('tabindex', '0');
+					trigger.setAttribute('title', 'Åbn batterioversigt');
 				});
-				return;
 			}
-			const url = link === 'local' ? 'https://192.168.0.105' : 'https://solarweb.com';
+
+			window.powerBuddyApplyBatteryLinkTarget = function (nextLink) {
+				batteryStat.setAttribute('data-battery-link', String(nextLink || ''));
+				applyBatteryLinkTarget(nextLink);
+			};
+
+			applyBatteryLinkTarget(batteryStat.getAttribute('data-battery-link') || '');
+
+			(async function refreshBatteryLinkFromAuthStatus() {
+				try {
+					const res = await fetch('?action=planning-auth-status', { cache: 'no-store' });
+					if (!res.ok) return;
+					const data = await res.json();
+					if (!data || !data.authorized) return;
+					if (typeof window.powerBuddyApplyBatteryLinkTarget === 'function') {
+						window.powerBuddyApplyBatteryLinkTarget(data.battery_link || '');
+					}
+				} catch (_) {
+					// Keep existing target if auth status cannot be fetched.
+				}
+			})();
 
 			triggers.forEach(function (trigger) {
-				trigger.style.cursor = 'pointer';
-				trigger.setAttribute('role', 'button');
-				trigger.setAttribute('tabindex', '0');
-				trigger.setAttribute('title', 'Åbn batterioversigt');
 				trigger.addEventListener('click', function (event) {
+					if (!url) return;
 					event.preventDefault();
 					event.stopPropagation();
 					window.open(url, '_blank', 'noopener,noreferrer');
 				});
 				trigger.addEventListener('keydown', function (event) {
+					if (!url) return;
 					if (event.key === 'Enter' || event.key === ' ') {
 						event.preventDefault();
 						event.stopPropagation();
