@@ -404,6 +404,10 @@ class Settings(BaseSettings):
         default=0.0,
         alias="POWERBUDDY_AUTO_BLOCK_EXTENSION_FLOOR_ABOVE_CHEAP_ORE",
     )
+    precheap_auto_convert_min_delta_ore: float = Field(
+        default=1.0,
+        alias="POWERBUDDY_PRECHEAP_AUTO_CONVERT_MIN_DELTA_ORE",
+    )
 
     kpi_tracking_enabled: bool = Field(default=True, alias="POWERBUDDY_KPI_TRACKING_ENABLED")
     auto_tuning_enabled: bool = Field(default=True, alias="POWERBUDDY_AUTO_TUNING_ENABLED")

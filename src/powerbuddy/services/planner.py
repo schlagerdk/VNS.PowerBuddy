@@ -962,6 +962,49 @@ class DayPlanner:
                     if not extended:
                         break
 
+            # Pre-cheap arbitrage smoothing: if a hold hour is followed by a cheap
+            # hour before any expensive hour, prefer auto over hold so we can use
+            # battery now and refill when prices drop.
+            if cheap_slot_indices and total_cost_levels:
+                precheap_auto_passes = max(1, len(actions))
+                precheap_auto_min_delta = max(0.0, float(settings.precheap_auto_convert_min_delta_ore))
+                for _ in range(precheap_auto_passes):
+                    converted = False
+                    for idx in range(len(actions)):
+                        if actions[idx].action != "hold":
+                            continue
+                        if self._is_reserve_hour(points[idx].timestamp):
+                            continue
+                        if idx in cheap_slot_indices:
+                            continue
+
+                        future_cheap = [j for j in cheap_slot_indices if j > idx]
+                        if not future_cheap:
+                            continue
+                        next_cheap_idx = min(future_cheap)
+
+                        future_expensive = [j for j in expensive_slot_indices if j > idx]
+                        next_expensive_idx = min(future_expensive) if future_expensive else None
+                        if next_expensive_idx is not None and next_expensive_idx < next_cheap_idx:
+                            continue
+
+                        current_price = total_cost_levels[idx]
+                        next_cheap_price = total_cost_levels[next_cheap_idx]
+                        if current_price <= (next_cheap_price + precheap_auto_min_delta):
+                            continue
+
+                        trial_precheap_auto = _rebuild_actions_with_overrides(
+                            {idx: "auto"},
+                            "price-order normalization: pre-cheap arbitrage prefers auto",
+                        )
+                        if _is_feasible_action_set(trial_precheap_auto):
+                            actions = trial_precheap_auto
+                            converted = True
+                            break
+
+                    if not converted:
+                        break
+
             # Never keep hold in expensive slots: use auto when feasible.
             if expensive_slot_indices:
                 expensive_hold_passes = max(1, len(actions))
