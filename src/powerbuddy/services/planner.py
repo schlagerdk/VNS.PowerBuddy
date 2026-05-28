@@ -1005,6 +1005,61 @@ class DayPlanner:
                     if not converted:
                         break
 
+            # Overnight strategy: run auto/discharge from evening into morning
+            # when daytime prices are clearly below night prices.
+            overnight_auto_enabled = bool(settings.overnight_auto_window_enabled)
+            overnight_auto_start = max(0, min(23, int(settings.overnight_auto_window_start_hour_local)))
+            overnight_auto_end = max(1, min(24, int(settings.overnight_auto_window_end_hour_local)))
+            night_cheapest_start = max(0, min(23, int(settings.overnight_night_cheapest_window_start_hour_local)))
+            night_cheapest_end = max(1, min(24, int(settings.overnight_night_cheapest_window_end_hour_local)))
+            overnight_day_cheaper_min_delta = max(0.0, float(settings.overnight_day_cheaper_min_delta_ore))
+            if overnight_auto_enabled and total_cost_levels:
+                night_indices = [
+                    idx for idx, point in enumerate(points)
+                    if self._is_hour_in_window(self._local_hour(point.timestamp), night_cheapest_start, night_cheapest_end)
+                ]
+                day_indices = [
+                    idx for idx, point in enumerate(points)
+                    if self._is_hour_in_window(self._local_hour(point.timestamp), overnight_auto_end, overnight_auto_start)
+                ]
+
+                if night_indices and day_indices:
+                    night_min = min(total_cost_levels[idx] for idx in night_indices)
+                    day_min = min(total_cost_levels[idx] for idx in day_indices)
+                    day_is_clearly_cheaper = (day_min + overnight_day_cheaper_min_delta) < night_min
+
+                    if day_is_clearly_cheaper:
+                        first_day_cheap_idx = min(
+                            idx for idx in day_indices
+                            if total_cost_levels[idx] <= (day_min + cheap_equal_tolerance)
+                        )
+                        overnight_auto_passes = max(1, len(actions))
+                        for _ in range(overnight_auto_passes):
+                            converted = False
+                            for idx, point in enumerate(points):
+                                if idx >= first_day_cheap_idx:
+                                    continue
+                                if actions[idx].action != "hold":
+                                    continue
+                                if not self._is_hour_in_window(
+                                    self._local_hour(point.timestamp),
+                                    overnight_auto_start,
+                                    overnight_auto_end,
+                                ):
+                                    continue
+
+                                trial_overnight_auto = _rebuild_actions_with_overrides(
+                                    {idx: "auto"},
+                                    "overnight strategy: auto before daytime cheap window",
+                                )
+                                if _is_feasible_action_set(trial_overnight_auto):
+                                    actions = trial_overnight_auto
+                                    converted = True
+                                    break
+
+                            if not converted:
+                                break
+
             # Never keep hold in expensive slots: use auto when feasible.
             if expensive_slot_indices:
                 expensive_hold_passes = max(1, len(actions))

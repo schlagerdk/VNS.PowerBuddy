@@ -408,6 +408,31 @@ class Settings(BaseSettings):
         default=1.0,
         alias="POWERBUDDY_PRECHEAP_AUTO_CONVERT_MIN_DELTA_ORE",
     )
+    # Night strategy: prefer auto/discharge overnight when daytime is clearly cheaper.
+    overnight_auto_window_enabled: bool = Field(
+        default=True,
+        alias="POWERBUDDY_OVERNIGHT_AUTO_WINDOW_ENABLED",
+    )
+    overnight_auto_window_start_hour_local: int = Field(
+        default=20,
+        alias="POWERBUDDY_OVERNIGHT_AUTO_WINDOW_START_HOUR_LOCAL",
+    )
+    overnight_auto_window_end_hour_local: int = Field(
+        default=8,
+        alias="POWERBUDDY_OVERNIGHT_AUTO_WINDOW_END_HOUR_LOCAL",
+    )
+    overnight_night_cheapest_window_start_hour_local: int = Field(
+        default=0,
+        alias="POWERBUDDY_OVERNIGHT_NIGHT_CHEAPEST_WINDOW_START_HOUR_LOCAL",
+    )
+    overnight_night_cheapest_window_end_hour_local: int = Field(
+        default=6,
+        alias="POWERBUDDY_OVERNIGHT_NIGHT_CHEAPEST_WINDOW_END_HOUR_LOCAL",
+    )
+    overnight_day_cheaper_min_delta_ore: float = Field(
+        default=2.0,
+        alias="POWERBUDDY_OVERNIGHT_DAY_CHEAPER_MIN_DELTA_ORE",
+    )
 
     kpi_tracking_enabled: bool = Field(default=True, alias="POWERBUDDY_KPI_TRACKING_ENABLED")
     auto_tuning_enabled: bool = Field(default=True, alias="POWERBUDDY_AUTO_TUNING_ENABLED")
