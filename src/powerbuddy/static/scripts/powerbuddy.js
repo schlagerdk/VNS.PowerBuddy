@@ -149,6 +149,7 @@
 			}
 
 			const mobileViewportQuery = window.matchMedia("(max-width: 900px)");
+			const compactDesktopViewportQuery = window.matchMedia("(min-width: 901px) and (max-width: 1366px) and (orientation: landscape)");
 
 			function isMobileForcedLongRange() {
 				return forceLongRange;
@@ -163,24 +164,26 @@
 			function fitChartHeightToViewport() {
 				if (!chartBars || !chartDataArea) return;
 
-				const shouldFitHeight = mobileViewportQuery.matches || isOverviewMode;
-				if (!shouldFitHeight) {
-					chart.style.removeProperty("--pb-mobile-chart-height");
-					if (isOverviewMode) {
-						chartBars.style.removeProperty("height");
-					}
-					return;
-				}
+				const isMobileViewport = mobileViewportQuery.matches;
+				const isCompactDesktopViewport = compactDesktopViewportQuery.matches;
 
 				const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
 				const viewportBottom = viewportHeight;
 				const chartRect = chart.getBoundingClientRect();
 				const barsRect = chartBars.getBoundingClientRect();
-				const bottomGap = isOverviewMode ? 20 : (mobileViewportQuery.matches ? 42 : 20);
+				const chartStyles = window.getComputedStyle(chart);
+				const chartMarginBottom = Number.parseFloat(chartStyles.marginBottom || '0') || 0;
+				const pageEl = chart.closest('.page');
+				const pagePaddingBottom = pageEl ? (Number.parseFloat(window.getComputedStyle(pageEl).paddingBottom || '0') || 0) : 0;
+				const structuralBottomSpace = (isMobileViewport || isOverviewMode) ? 0 : (chartMarginBottom + pagePaddingBottom);
+				const bottomGap = (isOverviewMode ? 20 : (isMobileViewport ? 42 : 20)) + structuralBottomSpace;
 				const chartOverhead = Math.max(0, chartRect.height - barsRect.height);
 				const availableHeight = viewportBottom - chartRect.top - bottomGap - chartOverhead;
-				const clampedHeight = Math.max(isOverviewMode ? 140 : 96, Math.floor(availableHeight));
+				const minHeight = isOverviewMode ? 140 : (isMobileViewport ? 96 : (isCompactDesktopViewport ? 264 : 292));
+				const maxHeight = isOverviewMode ? 492 : (isMobileViewport ? 320 : (isCompactDesktopViewport ? 464 : 492));
+				const clampedHeight = Math.min(maxHeight, Math.max(minHeight, Math.floor(availableHeight)));
 
+				chart.style.setProperty("--pb-chart-height", `${clampedHeight}px`);
 				chart.style.setProperty("--pb-mobile-chart-height", `${clampedHeight}px`);
 				if (isOverviewMode) {
 					chartBars.style.height = `${clampedHeight}px`;
@@ -190,7 +193,8 @@
 				const fittedRect = chart.getBoundingClientRect();
 				const overflowPx = Math.ceil(fittedRect.bottom - (viewportBottom - 8));
 				if (overflowPx > 0) {
-					const adjustedHeight = Math.max(isOverviewMode ? 140 : 96, clampedHeight - overflowPx - 2);
+					const adjustedHeight = Math.max(minHeight, clampedHeight - overflowPx - 2);
+					chart.style.setProperty("--pb-chart-height", `${adjustedHeight}px`);
 					chart.style.setProperty("--pb-mobile-chart-height", `${adjustedHeight}px`);
 					if (isOverviewMode) {
 						chartBars.style.height = `${adjustedHeight}px`;
@@ -1454,6 +1458,8 @@
 			let latestBatteryEtaMinutes = null;
 			let latestBatteryFlowText = 'Standby';
 			let latestBatteryClockLabel = '';
+			let latestBatteryPowerW = 0;
+			let latestBatteryCapacityKwh = null;
 
 			function formatEtaMinutes(totalMinutes) {
 				const safeMinutes = Math.max(0, Math.round(totalMinutes));
@@ -1465,9 +1471,14 @@
 			function formatClockFromNow(totalMinutes) {
 				if (!Number.isFinite(totalMinutes) || totalMinutes < 0) return null;
 				const target = new Date(Date.now() + (Math.round(totalMinutes) * 60000));
+				const now = new Date();
 				const hh = String(target.getHours()).padStart(2, '0');
 				const mm = String(target.getMinutes()).padStart(2, '0');
-				return `${hh}:${mm}`;
+				const nowDayIndex = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
+				const targetDayIndex = Math.floor(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) / 86400000);
+				const dayOffset = targetDayIndex - nowDayIndex;
+				const dayOffsetText = dayOffset === 0 ? '' : ` ${dayOffset > 0 ? `+${dayOffset}` : String(dayOffset)}`;
+				return `${hh}:${mm}${dayOffsetText}`;
 			}
 
 			function pickNested(obj, path) {
@@ -1575,6 +1586,14 @@
 					return `${Math.round(latestBatterySoc)}%`;
 				}
 
+				if (batteryDisplayMode === 'power-capacity') {
+					if (latestBatteryCapacityKwh !== null) {
+						const storedKwh = Math.max(0, (latestBatteryCapacityKwh * latestBatterySoc) / 100);
+						return `${toDa(storedKwh)} kWh`;
+					}
+					return `${Math.round(latestBatterySoc)}%`;
+				}
+
 				if (latestBatteryEtaMinutes === null) {
 					return 'Tid -';
 				}
@@ -1585,9 +1604,12 @@
 			function renderBatteryPrimaryValue() {
 				const displayValue = getBatteryPrimaryDisplayText();
 				const isTimeMode = batteryDisplayMode === 'time';
+				const isPowerCapacityMode = batteryDisplayMode === 'power-capacity';
 				const secondaryLine = isTimeMode
 					? (latestBatteryClockLabel || 'Tom/Fuld kl. -')
-					: latestBatteryFlowText;
+					: (isPowerCapacityMode
+						? (latestBatteryCapacityKwh !== null ? `Kapacitet ${toDa(latestBatteryCapacityKwh)} kWh` : 'Kapacitet -')
+						: latestBatteryFlowText);
 
 				setText('pbBatteryValue', displayValue);
 				setText('pbBatteryMeta', secondaryLine);
@@ -1596,14 +1618,20 @@
 			}
 
 			function toggleBatteryDisplayMode() {
-				batteryDisplayMode = batteryDisplayMode === 'time' ? 'percent' : 'time';
+				if (batteryDisplayMode === 'percent') {
+					batteryDisplayMode = 'time';
+				} else if (batteryDisplayMode === 'time') {
+					batteryDisplayMode = 'power-capacity';
+				} else {
+					batteryDisplayMode = 'percent';
+				}
 				renderBatteryPrimaryValue();
 			}
 
 			function bindBatteryToggle(el) {
 				if (!el) return;
 				el.style.cursor = 'pointer';
-				el.title = 'Skift mellem tid og %';
+				el.title = 'Skift mellem %, tid og kapacitet';
 				el.addEventListener('click', function (event) {
 					event.preventDefault();
 					event.stopPropagation();
@@ -1645,6 +1673,7 @@
 				const evPowerRaw = Math.max(0, asNum(data && data.ev_power_w));
 				const evPowerW = (evPowerRaw > 0 && evPowerRaw < 50) ? (evPowerRaw * 1000) : evPowerRaw;
 				const shouldShow = evAvailable && (evCharging || evPowerW >= 150);
+				const shouldShowInline = evPowerW > 0;
 
 				if (!shouldShow) {
 					setDisplay('pbEvBadge', 'none');
@@ -1657,7 +1686,7 @@
 				setText('pbEvBadgeValue', kwText);
 				setText('pbEvInlineValue', kwText);
 				setDisplay('pbEvBadge', 'inline-flex');
-				setDisplay('pbEvInline', 'inline-flex');
+				setDisplay('pbEvInline', shouldShowInline ? 'inline-flex' : 'none');
 			}
 
 			function updateHeroRealtime(data) {
@@ -1680,6 +1709,8 @@
 				const battClass = batteryCharging ? 'battery-charge' : (batteryDischarging ? 'battery-discharge' : 'battery-idle');
 
 				latestBatterySoc = batterySoc;
+				latestBatteryPowerW = batteryPowerW;
+				latestBatteryCapacityKwh = Number.isFinite(batteryCapacityKwh) && batteryCapacityKwh > 0 ? batteryCapacityKwh : null;
 				latestBatteryEtaMinutes = computeEtaMinutesFromPower(batterySoc, batteryPowerW, batteryCapacityKwh, reserveMinSoc);
 				latestBatteryFlowText = batteryCharging || batteryDischarging
 					? `${battArrow} ${battLabel} ${formatPower(Math.abs(batteryPowerW))}`
@@ -1716,8 +1747,12 @@
 				updateEvRealtime(data);
 			}
 
+			bindBatteryToggle(document.getElementById('pbBatteryStat'));
 			bindBatteryToggle(document.getElementById('pbBatteryValue'));
+			bindBatteryToggle(document.getElementById('pbBatteryMeta'));
+			bindBatteryToggle(document.getElementById('pbBatteryBadge'));
 			bindBatteryToggle(document.getElementById('pbBatteryBadgeSoc'));
+			bindBatteryToggle(document.getElementById('pbBatteryBadgeFlow'));
 
 			async function refreshRealtime() {
 				try {

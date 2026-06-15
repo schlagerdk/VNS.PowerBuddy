@@ -994,7 +994,9 @@
 			grid-template-columns: repeat(24, minmax(24px, 1fr));
 			gap: 8px;
 			align-items: flex-end;
-			height: 292px;
+			height: var(--pb-chart-height, clamp(292px, calc(100vh - 360px), 492px));
+			min-height: 292px;
+			max-height: 492px;
 			padding-top: 76px;
 			min-width: 0;
 		}
@@ -1010,7 +1012,9 @@
 		}
 
 		.chart-container.show-24 .chart-bars {
-			height: 292px;
+			height: var(--pb-chart-height, clamp(292px, calc(100vh - 360px), 492px));
+			min-height: 292px;
+			max-height: 492px;
 			padding-top: 76px;
 		}
 
@@ -1019,7 +1023,8 @@
 		}
 
 		.chart-container.overview-mode .chart-bars {
-			height: var(--pb-mobile-chart-height, 292px);
+			height: var(--pb-mobile-chart-height, 392px);
+			max-height: 492px;
 			min-width: 0;
 			grid-template-columns: repeat(var(--bar-cols, 24), minmax(0, 1fr));
 		}
@@ -2152,13 +2157,17 @@
 			}
 
 			.chart-bars {
-				height: 264px;
+				height: var(--pb-chart-height, clamp(264px, calc(100vh - 320px), 464px));
+				min-height: 264px;
+				max-height: 464px;
 				padding-top: 72px;
 			}
 
 			.chart-container.show-12 .chart-bars,
 			.chart-container.show-24 .chart-bars {
-				height: 264px;
+				height: var(--pb-chart-height, clamp(264px, calc(100vh - 320px), 464px));
+				min-height: 264px;
+				max-height: 464px;
 				padding-top: 72px;
 			}
 

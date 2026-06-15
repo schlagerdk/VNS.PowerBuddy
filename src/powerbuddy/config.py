@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BYD_HVM_CAPACITY_POWER_KW: Final[dict[float, float]] = {
     8.3: 4.51,
     11.0: 5.63,
-    13.8: 6.76,
-    16.6: 7.88,
+    13.8: 6.80,
+    16.6: 8.20,
     19.3: 9.01,
     22.1: 9.01,
 }
@@ -708,7 +708,7 @@ class Settings(BaseSettings):
     @property
     def battery_capacity_kwh(self) -> float:
         if _detected_battery_capacity_kwh is not None:
-            return float(self._nearest_hvm_capacity_kwh(_detected_battery_capacity_kwh))
+            return float(_detected_battery_capacity_kwh)
         return float(DEFAULT_BATTERY_CAPACITY_KWH)
 
     @property

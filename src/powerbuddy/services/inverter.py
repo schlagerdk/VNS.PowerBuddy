@@ -160,7 +160,7 @@ class FroniusClient(InverterClient):
             else:
                 value_kwh = value_f / 1000.0 if value_f > 100.0 else value_f
 
-            if 3.0 <= value_kwh <= 30.0:
+            if 1.0 <= value_kwh <= 200.0:
                 candidates.append((score, float(value_kwh)))
 
         _visit(payload)

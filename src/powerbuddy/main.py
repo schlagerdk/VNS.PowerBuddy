@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -56,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 
 scheduler = PowerBuddyScheduler()
+_battery_capacity_discovery_lock = asyncio.Lock()
+_battery_capacity_last_discovery_monotonic = 0.0
+_battery_capacity_discovery_interval_seconds = 1800.0
 
 
 class DashboardCookieOptions(TypedDict):
@@ -617,6 +621,23 @@ def _dashboard_has_login_session(request: Request) -> bool:
 
 
 async def _discover_battery_capacity() -> None:
+    global _battery_capacity_last_discovery_monotonic
+    now_monotonic = time.monotonic()
+    if (
+        _battery_capacity_last_discovery_monotonic > 0.0
+        and (now_monotonic - _battery_capacity_last_discovery_monotonic) < _battery_capacity_discovery_interval_seconds
+    ):
+        return
+
+    async with _battery_capacity_discovery_lock:
+        now_monotonic = time.monotonic()
+        if (
+            _battery_capacity_last_discovery_monotonic > 0.0
+            and (now_monotonic - _battery_capacity_last_discovery_monotonic) < _battery_capacity_discovery_interval_seconds
+        ):
+            return
+        _battery_capacity_last_discovery_monotonic = now_monotonic
+
     try:
         client = get_inverter_client()
         capacity = await client.get_battery_capacity_kwh()
@@ -628,12 +649,21 @@ async def _discover_battery_capacity() -> None:
         logger.warning("Battery capacity discovery returned no value; using fallback default")
         return
 
+    previous_capacity = float(settings.battery_capacity_kwh)
     set_detected_battery_capacity_kwh(capacity)
-    # Scheduler owns a long-lived planner instance created at import time.
-    # Recreate it to use freshly detected battery capacity.
-    scheduler.planner = DayPlanner()
+    current_capacity = float(settings.battery_capacity_kwh)
+    if abs(current_capacity - previous_capacity) > 1e-6:
+        # Scheduler owns a long-lived planner instance created at import time.
+        # Recreate it to use freshly detected battery capacity.
+        scheduler.planner = DayPlanner()
+        logger.info(
+            "Battery capacity updated %.2f -> %.2f kWh; planner reloaded",
+            previous_capacity,
+            current_capacity,
+        )
+
     logger.info(
-        "Detected battery capacity %.2f kWh (effective HVM size %.1f, max power %.2f kW)",
+        "Detected battery capacity %.2f kWh (effective capacity %.2f, auto power limit %.2f kW)",
         float(capacity),
         float(settings.battery_capacity_kwh),
         float(settings.battery_auto_power_limit_kw),
@@ -660,7 +690,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.7",
+    version="1.0.8",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -2005,6 +2035,7 @@ async def get_current_plan_status() -> PlanNowStatusOut:
 
 @app.get("/inverter/realtime", tags=["inverter"], summary="Read inverter realtime values")
 async def inverter_realtime() -> InverterRealtime:
+    await _discover_battery_capacity()
     client = get_inverter_client()
     data = await client.get_realtime()
     return InverterRealtime(

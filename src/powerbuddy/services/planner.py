@@ -1005,8 +1005,9 @@ class DayPlanner:
                     if not converted:
                         break
 
-            # Overnight strategy: run auto/discharge from evening into morning
-            # when daytime prices are clearly below night prices.
+            # Overnight guardrail: default to auto/discharge between evening and morning.
+            # Only allow charge during cheap night hours when battery would otherwise
+            # hit minimum SOC before the next cheap daytime hour.
             overnight_auto_enabled = bool(settings.overnight_auto_window_enabled)
             overnight_auto_start = max(0, min(23, int(settings.overnight_auto_window_start_hour_local)))
             overnight_auto_end = max(1, min(24, int(settings.overnight_auto_window_end_hour_local)))
@@ -1014,14 +1015,32 @@ class DayPlanner:
             night_cheapest_end = max(1, min(24, int(settings.overnight_night_cheapest_window_end_hour_local)))
             overnight_day_cheaper_min_delta = max(0.0, float(settings.overnight_day_cheaper_min_delta_ore))
             if overnight_auto_enabled and total_cost_levels:
-                night_indices = [
+                overnight_indices = [
                     idx for idx, point in enumerate(points)
-                    if self._is_hour_in_window(self._local_hour(point.timestamp), night_cheapest_start, night_cheapest_end)
+                    if self._is_hour_in_window(self._local_hour(point.timestamp), overnight_auto_start, overnight_auto_end)
+                ]
+                night_indices = [
+                    idx for idx in overnight_indices
+                    if self._is_hour_in_window(self._local_hour(points[idx].timestamp), night_cheapest_start, night_cheapest_end)
                 ]
                 day_indices = [
                     idx for idx, point in enumerate(points)
                     if self._is_hour_in_window(self._local_hour(point.timestamp), overnight_auto_end, overnight_auto_start)
                 ]
+
+                if overnight_indices:
+                    forced_auto_overrides = {
+                        idx: "auto"
+                        for idx in overnight_indices
+                        if actions[idx].action in {"hold", "charge"}
+                    }
+                    if forced_auto_overrides:
+                        trial_overnight_auto_default = _rebuild_actions_with_overrides(
+                            forced_auto_overrides,
+                            "overnight guardrail: avoid hold/charge in night window",
+                        )
+                        if _is_feasible_action_set(trial_overnight_auto_default):
+                            actions = trial_overnight_auto_default
 
                 if night_indices and day_indices:
                     night_min = min(total_cost_levels[idx] for idx in night_indices)
@@ -1029,36 +1048,54 @@ class DayPlanner:
                     day_is_clearly_cheaper = (day_min + overnight_day_cheaper_min_delta) < night_min
 
                     if day_is_clearly_cheaper:
-                        first_day_cheap_idx = min(
+                        daytime_cheap_indices = sorted(
                             idx for idx in day_indices
                             if total_cost_levels[idx] <= (day_min + cheap_equal_tolerance)
                         )
-                        overnight_auto_passes = max(1, len(actions))
-                        for _ in range(overnight_auto_passes):
-                            converted = False
-                            for idx, point in enumerate(points):
-                                if idx >= first_day_cheap_idx:
-                                    continue
-                                if actions[idx].action != "hold":
-                                    continue
-                                if not self._is_hour_in_window(
-                                    self._local_hour(point.timestamp),
-                                    overnight_auto_start,
-                                    overnight_auto_end,
-                                ):
-                                    continue
+                        if daytime_cheap_indices:
+                            def _soc_hits_min_before_target(actions_input: list[PlanAction], start_idx: int, target_idx: int) -> bool:
+                                soc_local = _soc_before_index(actions_input, start_idx)
+                                for sim_idx in range(start_idx, target_idx):
+                                    delta_battery_kwh, _grid_kwh, _throughput = self._transition(
+                                        actions_input[sim_idx].action,
+                                        soc_local,
+                                        scenario_base[sim_idx],
+                                        duration_hours=hour_durations[sim_idx],
+                                    )
+                                    soc_local = self._next_soc(soc_local, delta_battery_kwh)
+                                    if soc_local <= soc_min and sim_idx < (target_idx - 1):
+                                        return True
+                                return False
 
-                                trial_overnight_auto = _rebuild_actions_with_overrides(
-                                    {idx: "auto"},
-                                    "overnight strategy: auto before daytime cheap window",
-                                )
-                                if _is_feasible_action_set(trial_overnight_auto):
-                                    actions = trial_overnight_auto
-                                    converted = True
+                            overnight_charge_passes = max(1, len(overnight_indices))
+                            for _ in range(overnight_charge_passes):
+                                charged = False
+                                for idx in sorted(night_indices):
+                                    if idx >= len(actions):
+                                        continue
+                                    if actions[idx].action == "charge":
+                                        continue
+                                    if idx not in cheap_slot_indices:
+                                        continue
+
+                                    next_day_cheap = next((j for j in daytime_cheap_indices if j > idx), None)
+                                    if next_day_cheap is None:
+                                        continue
+
+                                    if not _soc_hits_min_before_target(actions, idx, next_day_cheap):
+                                        continue
+
+                                    trial_overnight_charge = _rebuild_actions_with_overrides(
+                                        {idx: "charge"},
+                                        "overnight guardrail exception: cheap night charge to reach daytime cheap window",
+                                    )
+                                    if _is_feasible_action_set(trial_overnight_charge):
+                                        actions = trial_overnight_charge
+                                        charged = True
+                                        break
+
+                                if not charged:
                                     break
-
-                            if not converted:
-                                break
 
             # Never keep hold in expensive slots: use auto when feasible.
             if expensive_slot_indices:
