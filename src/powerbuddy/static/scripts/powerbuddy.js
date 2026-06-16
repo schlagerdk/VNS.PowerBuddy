@@ -235,15 +235,18 @@
 					bar.classList.remove("edge-left", "edge-right");
 				});
 
-				const visibleBars = bars.filter((_, index) => index < visibleCount);
-				visibleBars.forEach((bar, index) => {
-					if (index === 0) {
-						bar.classList.add("edge-left");
-					}
-					if (index === visibleBars.length - 1) {
-						bar.classList.add("edge-right");
-					}
-				});
+				const shouldApplyEdgeClasses = !mobileViewportQuery.matches && visibleCount > 17;
+				if (shouldApplyEdgeClasses) {
+					const visibleBars = bars.filter((_, index) => index < visibleCount);
+					visibleBars.forEach((bar, index) => {
+						if (index === 0) {
+							bar.classList.add("edge-left");
+						}
+						if (index === visibleBars.length - 1) {
+							bar.classList.add("edge-right");
+						}
+					});
+				}
 
 				buttons.forEach((btn) => {
 					const value = Number(btn.getAttribute("data-range"));
@@ -1470,13 +1473,11 @@
 
 			function formatClockFromNow(totalMinutes) {
 				if (!Number.isFinite(totalMinutes) || totalMinutes < 0) return null;
-				const target = new Date(Date.now() + (Math.round(totalMinutes) * 60000));
-				const now = new Date();
+				const safeMinutes = Math.max(0, Math.round(totalMinutes));
+				const target = new Date(Date.now() + (safeMinutes * 60000));
 				const hh = String(target.getHours()).padStart(2, '0');
 				const mm = String(target.getMinutes()).padStart(2, '0');
-				const nowDayIndex = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
-				const targetDayIndex = Math.floor(Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) / 86400000);
-				const dayOffset = targetDayIndex - nowDayIndex;
+				const dayOffset = safeMinutes > 1440 ? Math.floor(safeMinutes / 1440) : 0;
 				const dayOffsetText = dayOffset === 0 ? '' : ` ${dayOffset > 0 ? `+${dayOffset}` : String(dayOffset)}`;
 				return `${hh}:${mm}${dayOffsetText}`;
 			}
