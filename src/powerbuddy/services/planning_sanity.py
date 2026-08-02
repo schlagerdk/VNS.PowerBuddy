@@ -59,6 +59,7 @@ def apply_planning_sanity(
 		"findings": [],
 		"ok": True,
 	}
+	is_summer_period = day.month in {5, 6, 7, 8, 9}
 
 	if not settings.planning_sanity_enabled:
 		return actions, report
@@ -172,9 +173,17 @@ def apply_planning_sanity(
 
 	soc_before_expensive = _soc_before(first_expensive_idx, start_soc, sim_soc)
 	reserve_soc = float(settings.reserve_soc_min_percent)
+	if is_summer_period:
+		# Summer mode: avoid forcing high pre-expensive SOC when PV typically refills daytime.
+		reserve_soc = float(settings.battery_min_soc)
+		target_soc = max(float(settings.battery_min_soc), min(float(settings.battery_max_soc), reserve_soc))
 	precheap_cheap_cutoff: float | None = None
 	precheap_forced_charge_indices: list[int] = []
 	precheap_forced_auto_indices: list[int] = []
+
+	def _slot_total_cost(idx: int) -> float:
+		hour = int(actions[idx].start_time.hour)
+		return price_by_hour.get(hour, 0.0) + (float(tariff_ore_per_hour[hour]) if tariff_ore_per_hour else 0.0)
 
 	findings: list[str] = []
 	if soc_before_expensive + 1e-6 < target_soc:
@@ -198,7 +207,7 @@ def apply_planning_sanity(
 		)
 
 	changes = 0
-	if auto_fix and bool(settings.planning_sanity_precheap_arbitrage_enabled) and first_expensive_idx > 0:
+	if auto_fix and bool(settings.planning_sanity_precheap_arbitrage_enabled) and first_expensive_idx > 0 and (not is_summer_period):
 		max_added_charge_hours = max(1, int(settings.planning_sanity_max_added_charge_hours))
 		precheap_auto_start = max(0, min(23, int(settings.planning_sanity_precheap_auto_start_hour_local)))
 		pre_exp_indices = [
@@ -210,16 +219,12 @@ def apply_planning_sanity(
 		]
 
 		if pre_exp_indices:
-			def _slot_total(idx: int) -> float:
-				hour = int(actions[idx].start_time.hour)
-				return price_by_hour.get(hour, 0.0) + (float(tariff_ore_per_hour[hour]) if tariff_ore_per_hour else 0.0)
-
-			pre_costs = [_slot_total(idx) for idx in pre_exp_indices]
+			pre_costs = [_slot_total_cost(idx) for idx in pre_exp_indices]
 			precheap_cheap_cutoff = _quantile(pre_costs, settings.planning_sanity_charge_candidate_quantile)
 
 			cheap_indices = [
 				idx for idx in pre_exp_indices
-				if _slot_total(idx) <= (precheap_cheap_cutoff + 1e-6)
+				if _slot_total_cost(idx) <= (precheap_cheap_cutoff + 1e-6)
 			]
 			cheap_indices = sorted(cheap_indices, key=lambda idx: (int(actions[idx].start_time.hour), idx))
 
@@ -239,7 +244,7 @@ def apply_planning_sanity(
 						continue
 					if precheap_cheap_cutoff is None:
 						continue
-					if _slot_total(idx) < (precheap_cheap_cutoff + min_delta):
+					if _slot_total_cost(idx) < (precheap_cheap_cutoff + min_delta):
 						continue
 
 					soc_before_here = _soc_before(idx, start_soc, sim_soc)
@@ -254,7 +259,7 @@ def apply_planning_sanity(
 					sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
 
 				# Re-fill only as needed in cheap slots so we hit target SOC before expensive window.
-				cheap_by_price = sorted(cheap_indices, key=lambda idx: _slot_total(idx))
+				cheap_by_price = sorted(cheap_indices, key=lambda idx: _slot_total_cost(idx))
 				added_charge = 0
 				for idx in cheap_by_price:
 					if added_charge >= max_added_charge_hours:
@@ -273,7 +278,7 @@ def apply_planning_sanity(
 
 	if auto_fix and findings:
 		# Priority 1: ensure enough SOC before expensive window by charging cheapest pre-expensive hours.
-		if soc_before_expensive + 1e-6 < target_soc:
+		if (not is_summer_period) and soc_before_expensive + 1e-6 < target_soc:
 			max_added_charge_hours = max(1, int(settings.planning_sanity_max_added_charge_hours))
 			pre_candidates = [
 				idx
@@ -317,6 +322,27 @@ def apply_planning_sanity(
 			actions[idx].reason = "sanity autofix: avoid hold in expensive window"
 			changes += 1
 			sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+
+	# Seasonal cap on non-manual/non-reserve grid charge slots.
+	# Summer: very restrictive. Non-summer: keep at most 5 cheapest charge hours.
+	if auto_fix:
+		max_charge_slots = 2 if is_summer_period else 5
+		charge_candidates = [
+			idx
+			for idx in valid_indices
+			if actions[idx].action == "charge"
+			and not actions[idx].is_manual_override
+			and (not planner._is_reserve_hour(actions[idx].start_time))
+		]
+		if len(charge_candidates) > max_charge_slots:
+			for idx in sorted(charge_candidates, key=_slot_total_cost, reverse=True):
+				if len(charge_candidates) <= max_charge_slots:
+					break
+				actions[idx].action = "auto"
+				actions[idx].charge_power_w = None
+				actions[idx].reason = "sanity autofix: seasonal charge-slot cap"
+				changes += 1
+				charge_candidates.remove(idx)
 
 	# Refresh charge target SOC hints from simulation after all changes.
 	sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)

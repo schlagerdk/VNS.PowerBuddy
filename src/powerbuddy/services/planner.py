@@ -178,7 +178,8 @@ class DayPlanner:
             if pv_weather_factor_24h is not None and len(pv_weather_factor_24h) == 24:
                 weather_factor = max(0.0, float(pv_weather_factor_24h[hour]))
             pv = max(0.0, pv_profile_kwh[hour] * weather_factor)
-            net.append(max(0.0, gross[idx] - pv))
+            # Keep sign so negative values represent PV surplus available for battery charging.
+            net.append(gross[idx] - pv)
         return net
 
     def _transition(
@@ -192,7 +193,7 @@ class DayPlanner:
         Returns (delta_battery_kwh, grid_kwh, battery_throughput_kwh) for one hour.
         """
         duration = max(0.0, min(1.0, float(duration_hours)))
-        net_consumption_kwh = max(0.0, float(hourly_net_consumption_kwh)) * duration
+        net_consumption_kwh = float(hourly_net_consumption_kwh) * duration
         soc_f = float(soc)
         available_room_kwh = ((self.max_soc - soc_f) / 100.0) * self.capacity_kwh
         available_energy_kwh = ((soc_f - self.min_soc) / 100.0) * self.capacity_kwh
@@ -204,6 +205,16 @@ class DayPlanner:
             return battery_delta, net_consumption_kwh + grid_charge_kwh, abs(battery_delta)
 
         if action in {"auto", "discharge"}:
+            # With PV surplus (negative net), auto can absorb solar into battery.
+            if action == "auto" and net_consumption_kwh < 0.0:
+                solar_surplus_kwh = abs(net_consumption_kwh)
+                max_solar_charge_kwh = min(
+                    solar_surplus_kwh,
+                    available_room_kwh / max(self.charge_efficiency, 1e-6),
+                )
+                battery_delta = max_solar_charge_kwh * self.charge_efficiency
+                return battery_delta, 0.0, abs(battery_delta)
+
             max_delivery_kwh = min(self.max_discharge_kwh * duration, net_consumption_kwh)
             max_delivery_from_soc = available_energy_kwh * self.discharge_efficiency
             delivered_kwh = max(0.0, min(max_delivery_kwh, max_delivery_from_soc))
@@ -283,6 +294,11 @@ class DayPlanner:
         must_start_hour = max(0, min(23, int(settings.must_charge_window_start_hour_local)))
         must_end_hour = max(1, min(24, int(settings.must_charge_window_end_hour_local)))
         now_local_naive = now_local_naive_raw.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+        is_summer_period = data.day.month in {5, 6, 7, 8, 9}
+
+        # Summer behavior: do not force high reserve SOC in evening window.
+        if is_summer_period:
+            reserve_soc = soc_min
 
         enforce_low_soc_by_index: list[bool] = []
         for point in points:
@@ -307,6 +323,13 @@ class DayPlanner:
         auto_block_extension_enabled = bool(settings.auto_block_extension_enabled)
         auto_block_drop_limit = max(0.0, float(settings.auto_block_extension_drop_limit_ore))
         auto_block_floor_above_cheap = max(0.0, float(settings.auto_block_extension_floor_above_cheap_ore))
+
+        # Summer profile: PV often refills during daytime, so reduce proactive grid-charging pressure.
+        if is_summer_period:
+            auto_expensive_guard_enabled = False
+            expensive_precharge_enabled = False
+            cheap_slot_capture_enabled = False
+
         total_cost_levels = [
             float(points[idx].price_ore_per_kwh) + (float(data.tariff_ore_per_hour[idx]) if data.tariff_ore_per_hour else 0.0)
             for idx in range(len(points))
@@ -341,8 +364,9 @@ class DayPlanner:
             cheap_slot_capture_enabled = False
 
         expensive_entry_soc_requirements: dict[int, int] = {}
-        if expensive_precharge_enabled and total_cost_levels and auto_expensive_threshold > 0.0:
-            expensive_mask = [level >= auto_expensive_threshold for level in total_cost_levels]
+        entry_soc_threshold = very_expensive_threshold if very_expensive_threshold > 0.0 else auto_expensive_threshold
+        if expensive_precharge_enabled and total_cost_levels and entry_soc_threshold > 0.0:
+            expensive_mask = [level >= entry_soc_threshold for level in total_cost_levels]
 
             segments: list[tuple[int, int]] = []
             seg_start: int | None = None
@@ -452,6 +476,19 @@ class DayPlanner:
                     ):
                         continue
 
+                    # Exclude hold in overnight window (20:00-08:00) to reduce excessive battery preservation
+                    # This is hardcoded as the primary behavior for overnight hours
+                    if action == "hold":
+                        local_hour = self._local_hour(points[t].timestamp)
+                        if local_hour >= 20 or local_hour < 8:
+                            continue
+
+                    # Summer guardrail: avoid proactive grid charging overnight/morning.
+                    if action == "charge" and is_summer_period:
+                        local_hour = self._local_hour(points[t].timestamp)
+                        if local_hour < 10:
+                            continue
+
                     if self._is_reserve_hour(points[t].timestamp) and soc < reserve_soc and action != "charge":
                         continue
 
@@ -554,6 +591,12 @@ class DayPlanner:
         soc = start_soc
         for idx, point in enumerate(points):
             action = choice[idx][soc]
+
+            # Force auto in overnight window (20:00-08:00) instead of hold
+            local_hour = self._local_hour(point.timestamp)
+            if action == "hold" and (local_hour >= 20 or local_hour < 8):
+                action = "auto"
+
             delta_battery_kwh, _grid_kwh, _throughput = self._transition(
                 action,
                 soc,
@@ -769,35 +812,41 @@ class DayPlanner:
                 if updated_actions is not None:
                     actions = updated_actions
 
-        # Anti-idiotic normalization: if a pricier hour charges while a clearly cheaper hour holds,
-        # swap the actions when constraints remain feasible.
+        # Anti-idiotic normalization: if a pricier hour charges while a clearly cheaper
+        # non-charge hour exists, swap when constraints remain feasible.
         if total_cost_levels:
             swap_threshold = max(0.0, float(settings.price_order_swap_min_delta_ore))
             max_passes = max(4, len(actions) * 2)
             for _ in range(max_passes):
                 changed = False
                 charge_indices = [idx for idx, action in enumerate(actions) if action.action == "charge"]
-                hold_indices = [idx for idx, action in enumerate(actions) if action.action == "hold"]
+                non_charge_indices = [
+                    idx
+                    for idx, action in enumerate(actions)
+                    if action.action in {"hold", "auto"}
+                ]
                 for charge_idx in charge_indices:
                     if self._is_reserve_hour(points[charge_idx].timestamp):
                         continue
                     pricier = total_cost_levels[charge_idx]
 
-                    better_hold = None
+                    better_slot = None
                     better_price = pricier
-                    for hold_idx in hold_indices:
-                        if self._is_reserve_hour(points[hold_idx].timestamp):
+                    for candidate_idx in non_charge_indices:
+                        if self._is_reserve_hour(points[candidate_idx].timestamp):
                             continue
-                        cheaper = total_cost_levels[hold_idx]
+                        cheaper = total_cost_levels[candidate_idx]
                         if cheaper + swap_threshold < better_price:
-                            better_hold = hold_idx
+                            better_slot = candidate_idx
                             better_price = cheaper
 
-                    if better_hold is None:
+                    if better_slot is None:
                         continue
 
+                    replacement_at_charge = actions[better_slot].action if actions[better_slot].action in {"hold", "auto"} else "auto"
+
                     trial = _rebuild_actions_with_overrides(
-                        {charge_idx: "hold", better_hold: "charge"},
+                        {charge_idx: replacement_at_charge, better_slot: "charge"},
                         "price-order normalization: moved charge to cheaper hour",
                     )
                     if _is_feasible_action_set(trial):
@@ -1027,6 +1076,7 @@ class DayPlanner:
                     idx for idx, point in enumerate(points)
                     if self._is_hour_in_window(self._local_hour(point.timestamp), overnight_auto_end, overnight_auto_start)
                 ]
+                daytime_cheap_indices: list[int] = []
 
                 if overnight_indices:
                     forced_auto_overrides = {
@@ -1096,6 +1146,70 @@ class DayPlanner:
 
                                 if not charged:
                                     break
+
+                # Keep overnight hold only when a very expensive period arrives before
+                # the next cheap daytime refill opportunity.
+                if overnight_indices:
+                    very_expensive_future = sorted(very_expensive_slot_indices)
+                    overnight_hold_trim_passes = max(1, len(overnight_indices))
+                    for _ in range(overnight_hold_trim_passes):
+                        trimmed = False
+                        for idx in sorted(overnight_indices):
+                            if idx < 0 or idx >= len(actions):
+                                continue
+                            if actions[idx].action != "hold":
+                                continue
+
+                            next_day_cheap = next((j for j in daytime_cheap_indices if j > idx), None)
+                            next_very_expensive = next((j for j in very_expensive_future if j > idx), None)
+
+                            if (
+                                next_very_expensive is not None
+                                and (next_day_cheap is None or next_very_expensive < next_day_cheap)
+                            ):
+                                continue
+
+                            trial_overnight_auto_trim = _rebuild_actions_with_overrides(
+                                {idx: "auto"},
+                                "overnight guardrail: hold trimmed unless very expensive before refill",
+                            )
+                            if _is_feasible_action_set(trial_overnight_auto_trim):
+                                actions = trial_overnight_auto_trim
+                                trimmed = True
+                                break
+
+                        if not trimmed:
+                            break
+
+            # General hold trimming: eliminate hold unless an expensive period is ahead.
+            # This reduces manual interventions for discharge-heavy profiles (summer season).
+            if expensive_slot_indices and cheap_slot_indices:
+                hold_trim_passes = max(1, len(actions))
+                for _ in range(hold_trim_passes):
+                    trimmed = False
+                    hold_indices = [idx for idx, a in enumerate(actions) if a.action == "hold"]
+                    for idx in hold_indices:
+                        # Find next expensive period after this hold slot
+                        next_expensive = next((j for j in expensive_slot_indices if j > idx), None)
+                        # Find next cheap period after this hold slot
+                        next_cheap = next((j for j in cheap_slot_indices if j > idx), None)
+
+                        # Keep hold only if expensive comes before cheap (or no cheap at all)
+                        if next_expensive is not None and (next_cheap is None or next_expensive < next_cheap):
+                            continue
+
+                        # Trim this hold to auto
+                        trial_hold_trim = _rebuild_actions_with_overrides(
+                            {idx: "auto"},
+                            "hold trimming: prefer discharge when no expensive period before refill",
+                        )
+                        if _is_feasible_action_set(trial_hold_trim):
+                            actions = trial_hold_trim
+                            trimmed = True
+                            break
+
+                    if not trimmed:
+                        break
 
             # Never keep hold in expensive slots: use auto when feasible.
             if expensive_slot_indices:
@@ -1171,6 +1285,141 @@ class DayPlanner:
 
             if not trimmed:
                 break
+
+        # Seasonal charge policy:
+        # - Summer months: avoid grid charging when feasible (PV usually covers daytime refill).
+        # - Non-summer months: keep at most the 5 cheapest charge slots; tie-overflow can fall back to hold.
+        if total_cost_levels:
+            if is_summer_period:
+                # Prefer any required summer charging in daytime (PV/cheap-hour friendly),
+                # not overnight.
+                preferred_day_start = 10
+                preferred_day_end = 17
+                preferred_day_indices = sorted(
+                    [
+                        idx
+                        for idx, point in enumerate(points)
+                        if preferred_day_start <= self._local_hour(point.timestamp) < preferred_day_end
+                        and not self._is_reserve_hour(point.timestamp)
+                    ],
+                    key=lambda i: total_cost_levels[i],
+                )
+
+                summer_shift_passes = max(1, len(actions))
+                for _ in range(summer_shift_passes):
+                    charge_indices = [idx for idx, a in enumerate(actions) if a.action == "charge"]
+                    overnight_charge_indices = [
+                        idx
+                        for idx in charge_indices
+                        if self._local_hour(points[idx].timestamp) < preferred_day_start
+                        or self._local_hour(points[idx].timestamp) >= preferred_day_end
+                    ]
+                    if not overnight_charge_indices or not preferred_day_indices:
+                        break
+
+                    shifted_any = False
+                    for from_idx in sorted(overnight_charge_indices, key=lambda i: total_cost_levels[i], reverse=True):
+                        for to_idx in preferred_day_indices:
+                            if from_idx == to_idx:
+                                continue
+                            if actions[to_idx].action == "charge":
+                                continue
+
+                            trial_shift = _rebuild_actions_with_overrides(
+                                {from_idx: "auto", to_idx: "charge"},
+                                "summer policy: moved charge from night to daytime cheap hour",
+                            )
+                            if _is_feasible_action_set(trial_shift):
+                                actions = trial_shift
+                                shifted_any = True
+                                break
+
+                        if shifted_any:
+                            break
+
+                    if not shifted_any:
+                        break
+
+                summer_remove_passes = max(1, len(actions) * 2)
+                for _ in range(summer_remove_passes):
+                    charge_indices = [idx for idx, a in enumerate(actions) if a.action == "charge"]
+                    if not charge_indices:
+                        break
+
+                    removed_any = False
+                    # Remove most expensive charge first, then continue until feasibility blocks further removals.
+                    for idx in sorted(charge_indices, key=lambda i: total_cost_levels[i], reverse=True):
+                        trial_summer = _rebuild_actions_with_overrides(
+                            {idx: "auto"},
+                            "summer policy: removed non-essential grid charge",
+                        )
+                        if _is_feasible_action_set(trial_summer):
+                            actions = trial_summer
+                            removed_any = True
+                            break
+
+                    if not removed_any:
+                        break
+            else:
+                max_non_summer_charge_slots = 5
+                charge_indices = [idx for idx, a in enumerate(actions) if a.action == "charge"]
+                if len(charge_indices) > max_non_summer_charge_slots:
+                    sorted_charge = sorted(charge_indices, key=lambda i: (total_cost_levels[i], i))
+                    keep_set = set(sorted_charge[:max_non_summer_charge_slots])
+                    cutoff_price = total_cost_levels[sorted_charge[max_non_summer_charge_slots - 1]]
+
+                    reduce_candidates = [idx for idx in charge_indices if idx not in keep_set]
+                    for idx in sorted(reduce_candidates, key=lambda i: (total_cost_levels[i], i), reverse=True):
+                        # If many slots tie around the cheapest band, allow hold as soft fallback.
+                        replacement = "hold" if abs(total_cost_levels[idx] - cutoff_price) <= cheap_equal_tolerance else "auto"
+                        trial_non_summer = _rebuild_actions_with_overrides(
+                            {idx: replacement},
+                            "non-summer policy: charge-slot cap to cheapest hours",
+                        )
+                        if _is_feasible_action_set(trial_non_summer):
+                            actions = trial_non_summer
+
+        # Direct post-DP fix: Remove illogical holds (hold after charge, hold at night)
+        for idx, action in enumerate(actions):
+            local_hour = self._local_hour(action.start_time)
+
+            # Summer guardrail: never keep grid-charge outside daytime window.
+            if is_summer_period and action.action == "charge" and local_hour < 10:
+                action.action = "auto"
+                action.charge_power_w = None
+                action.target_soc = None
+                action.reason = "post-dp summer policy: early grid-charge removed"
+                continue
+
+            if action.action == "hold":
+                # Summer mode: prefer auto/discharge over hold to reduce manual intervention.
+                if is_summer_period:
+                    action.action = "auto"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "post-dp summer policy: hold removed"
+                    continue
+
+                # Remove hold in overnight window (20:00-08:00)
+                if local_hour >= 20 or local_hour < 8:
+                    action.action = "auto"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "post-dp: overnight hold removed"
+                    continue
+
+                # Remove hold if it comes within 2 hours after charge (illogical)
+                is_after_recent_charge = False
+                for prev_idx in range(max(0, idx - 2), idx):
+                    if actions[prev_idx].action == "charge":
+                        is_after_recent_charge = True
+                        break
+
+                if is_after_recent_charge:
+                    action.action = "auto"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "post-dp: hold after charge removed"
 
         return actions
 
@@ -1338,11 +1587,14 @@ class DayPlanner:
 
             soc_after = float(simulation[idx].projected_soc) if idx < len(simulation) else soc_before
             if soc_after <= (soc_before + 0.05):
-                action.action = "hold"
-                action.charge_power_w = None
-                action.target_soc = None
-                action.reason = "price-order normalization: removed redundant charge hour"
-                trimmed = True
+                # Don't convert charge to hold in overnight window (20-08)
+                local_hour = self._local_hour(action.start_time)
+                if not (local_hour >= 20 or local_hour < 8):
+                    action.action = "hold"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "price-order normalization: removed redundant charge hour"
+                    trimmed = True
 
             soc_before = soc_after
 
@@ -1362,6 +1614,11 @@ class DayPlanner:
             removed = False
             for idx, action in enumerate(sorted_actions):
                 if action.action != "charge" or action.is_manual_override:
+                    continue
+
+                # Don't convert charge to hold in overnight window
+                local_hour = self._local_hour(action.start_time)
+                if local_hour >= 20 or local_hour < 8:
                     continue
 
                 trial_actions = _clone_actions(sorted_actions)
@@ -1419,6 +1676,11 @@ class DayPlanner:
 
                 removed_any = False
                 for idx in candidates:
+                    # Don't convert charge to hold in overnight window (20-08)
+                    local_hour = self._local_hour(sorted_actions[idx].start_time)
+                    if local_hour >= 20 or local_hour < 8:
+                        continue
+
                     trial_actions = _clone_actions(sorted_actions)
                     trial_actions[idx].action = "hold"
                     trial_actions[idx].charge_power_w = None
@@ -1463,6 +1725,11 @@ class DayPlanner:
                 for charge_idx in charge_candidates:
                     charge_hour = self._local_hour(sorted_actions[charge_idx].start_time)
                     charge_cost = _slot_total_price_ore(charge_hour)
+
+                    # Don't convert charge to hold in overnight window
+                    if charge_hour >= 20 or charge_hour < 8:
+                        continue
+
                     for hold_idx in hold_candidates:
                         if hold_idx == charge_idx:
                             continue
@@ -1528,10 +1795,56 @@ class DayPlanner:
                 for idx in non_manual_charge_indices:
                     if idx in keep_non_manual:
                         continue
+                    # Don't convert charge to hold in overnight window
+                    local_hour = self._local_hour(sorted_actions[idx].start_time)
+                    if local_hour >= 20 or local_hour < 8:
+                        continue
+
                     sorted_actions[idx].action = "hold"
                     sorted_actions[idx].charge_power_w = None
                     sorted_actions[idx].target_soc = None
                     sorted_actions[idx].reason = "economic optimization: capped charge hours to battery need"
                     trimmed = True
 
-        return sorted_actions if trimmed else actions
+        # FINAL PASS: Eliminate all hold actions in overnight window (20:00-08:00)
+        # This is a safety net to ensure no nighttime holds escape from earlier optimizations
+        for idx, action in enumerate(sorted_actions):
+            if action.action == "hold":
+                local_hour = self._local_hour(action.start_time)
+                if local_hour >= 20 or local_hour < 8:
+                    action.action = "auto"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "overnight safety: hold converted to auto"
+                    trimmed = True
+
+        # FINAL PASS 2: Eliminate illogical hold immediately after charge (within 2 hours)
+        # Holding within 2 hours of charging makes no economic sense; should either keep charging, discharge, or auto
+        debug_log = []
+        for idx, action in enumerate(sorted_actions):
+            if action.action == "hold":
+                # Check if this hold is within 2 hours after a charge period
+                is_after_recent_charge = False
+                for prev_idx in range(max(0, idx - 2), idx):
+                    if sorted_actions[prev_idx].action == "charge":
+                        is_after_recent_charge = True
+                        break
+
+                local_hour = self._local_hour(action.start_time)
+                debug_log.append("HOLD at hour {} (idx {}): after_recent_charge={}".format(local_hour, idx, is_after_recent_charge))
+
+                if is_after_recent_charge:
+                    debug_log.append("  -> Converting to AUTO")
+                    action.action = "auto"
+                    action.charge_power_w = None
+                    action.target_soc = None
+                    action.reason = "post-charge illogical hold removed: converted to auto"
+                    trimmed = True
+
+        # Write debug log for offline analysis
+        if debug_log:
+            with open("/tmp/planner_debug.log", "a") as f:
+                for line in debug_log:
+                    f.write(line + "\n")
+
+        return sorted_actions

@@ -233,6 +233,9 @@
 				bars.forEach((bar, index) => {
 					bar.classList.toggle("is-hidden", index >= visibleCount);
 					bar.classList.remove("edge-left", "edge-right");
+					bar.querySelectorAll(".bar-flag").forEach((flag) => {
+						flag.classList.remove("first", "last");
+					});
 				});
 
 				const shouldApplyEdgeClasses = !mobileViewportQuery.matches && visibleCount > 17;
@@ -241,9 +244,15 @@
 					visibleBars.forEach((bar, index) => {
 						if (index === 0) {
 							bar.classList.add("edge-left");
+							bar.querySelectorAll(".bar-flag").forEach((flag) => {
+								flag.classList.add("first");
+							});
 						}
 						if (index === visibleBars.length - 1) {
 							bar.classList.add("edge-right");
+							bar.querySelectorAll(".bar-flag").forEach((flag) => {
+								flag.classList.add("last");
+							});
 						}
 					});
 				}

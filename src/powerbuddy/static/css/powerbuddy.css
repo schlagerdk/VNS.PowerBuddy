@@ -1930,7 +1930,18 @@
 			transform: none;
 		}
 
+		.bar-flag.first {
+			left: 0;
+			transform: none;
+		}
+
 		.bar-wrapper.edge-right .bar-flag {
+			left: auto;
+			right: 0;
+			transform: none;
+		}
+
+		.bar-flag.last {
 			left: auto;
 			right: 0;
 			transform: none;

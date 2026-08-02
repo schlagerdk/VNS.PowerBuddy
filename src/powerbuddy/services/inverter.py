@@ -403,7 +403,7 @@ class FroniusClient(InverterClient):
             # Keep discharge_force as a backwards-compatible alias.
             is_discharge = action in {"discharge", "discharge_force"}
             max_charge_w = int(max(0.0, float(settings.max_charge_kw) * 1000.0))
-            max_discharge_w = max(0, int(settings.force_discharge_power_w))
+            max_discharge_w = int(max(0.0, float(settings.max_discharge_kw) * 1000.0))
             if charge_power_w is not None:
                 force_load_power_w = int(round(max(0.0, float(charge_power_w))))
             else:
