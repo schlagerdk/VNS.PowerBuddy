@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260519m" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260831g" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -45,6 +45,89 @@
 					<div>
 						<h1>PowerBuddy</h1>
 						<p>Pris- og energioverblik med PowerBuddy</p>
+					</div>
+				</div>
+				<div class="header-actions">
+					<button id="pbHeaderMenuButton" class="pb-menu-button" type="button" aria-label="Menu" aria-expanded="false">
+						<span id="pbHeaderMenuIcon" class="pb-menu-button-icon" aria-hidden="true">
+							<span class="pb-menu-button-lines"><span></span><span></span><span></span></span>
+						</span>
+					</button>
+					<div id="pbMenuPanel" class="pb-menu-panel" aria-hidden="true">
+						<div class="pb-menu-panel-card">
+							<div class="pb-menu-section-title">Menu</div>
+							<button type="button" class="pb-menu-item" data-menu-action="logs">
+								<span class="pb-menu-item-label">Log</span>
+							</button>
+							<button type="button" class="pb-menu-item" data-menu-action="settings">
+								<span class="pb-menu-item-label">Indstillinger</span>
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div id="pbLogModal" class="pb-log-modal" aria-hidden="true">
+				<div class="pb-log-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbLogModalTitle">
+					<div class="pb-log-modal-head">
+						<div id="pbLogModalTitle" class="pb-log-modal-title">PowerBuddy log</div>
+						<button id="pbLogModalClose" type="button" class="pb-log-modal-close" aria-label="Luk log">&times;</button>
+					</div>
+					<div class="pb-log-modal-toolbar">
+						<div class="pb-log-filter-group" role="group" aria-label="Logfilter">
+							<button type="button" class="pb-log-filter is-active" data-log-filter="all">Alle</button>
+							<button type="button" class="pb-log-filter" data-log-filter="error">Error</button>
+							<button type="button" class="pb-log-filter" data-log-filter="warning">Warning</button>
+							<button type="button" class="pb-log-filter" data-log-filter="info">Info</button>
+						</div>
+						<input id="pbLogSearch" class="pb-log-search" type="search" placeholder="Filtrer tekst..." aria-label="Filtrer logtekst" />
+					</div>
+					<div class="pb-log-modal-body">
+						<div id="pbLogStatus" class="pb-log-status">Logger ind for at se loggen.</div>
+						<div id="pbLogOutput" class="pb-log-output">Ingen logdata tilgængelig.</div>
+					</div>
+				</div>
+			</div>
+
+			<div id="pbHeaderLoginModal" class="pb-log-modal" aria-hidden="true">
+				<div class="pb-log-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbHeaderLoginTitle">
+					<div class="pb-log-modal-head">
+						<div id="pbHeaderLoginTitle" class="pb-log-modal-title">Login</div>
+						<button id="pbHeaderLoginClose" type="button" class="pb-log-modal-close" aria-label="Luk login">&times;</button>
+					</div>
+					<div class="pb-log-modal-body">
+						<form id="pbHeaderLoginForm" class="pb-login-form">
+							<input id="pbHeaderLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="Adgangskode" required />
+							<button id="pbHeaderLoginSubmit" type="submit" class="pb-login-submit">Login</button>
+						</form>
+						<div id="pbHeaderLoginStatus" class="pb-log-status" aria-live="polite"></div>
+					</div>
+				</div>
+			</div>
+
+			<div id="pbSettingsModal" class="pb-log-modal" aria-hidden="true">
+				<div class="pb-log-modal-card pb-settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbSettingsModalTitle">
+					<div class="pb-log-modal-head">
+						<div id="pbSettingsModalTitle" class="pb-log-modal-title">Indstillinger</div>
+						<button id="pbSettingsModalClose" type="button" class="pb-log-modal-close" aria-label="Luk indstillinger">&times;</button>
+					</div>
+					<div class="pb-settings-body">
+						<div class="pb-settings-intro">Manuelle systemhandlinger</div>
+						<div class="pb-settings-actions">
+							<button type="button" class="pb-settings-action" data-settings-action="fetch-prices">
+								<span class="pb-settings-action-icon" aria-hidden="true">↻</span>
+								<span><strong>Hent priser nu</strong><small>Opdater prisdata uden at ændre planen</small></span>
+							</button>
+							<button type="button" class="pb-settings-action" data-settings-action="generate-plan">
+								<span class="pb-settings-action-icon" aria-hidden="true">⌁</span>
+								<span><strong>Lav plan nu</strong><small>Generér plan ud fra gemte priser</small></span>
+							</button>
+							<button type="button" class="pb-settings-action is-primary" data-settings-action="refresh-and-plan">
+								<span class="pb-settings-action-icon" aria-hidden="true">↻</span>
+								<span><strong>Hent priser og lav plan</strong><small>Kør begge trin for hele planlægningsvinduet</small></span>
+							</button>
+						</div>
+						<div id="pbSettingsStatus" class="pb-log-status" aria-live="polite"></div>
 					</div>
 				</div>
 			</div>
@@ -505,7 +588,7 @@
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260519m"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260831g"></script>
 </body>
 </html>
 

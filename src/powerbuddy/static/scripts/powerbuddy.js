@@ -493,7 +493,9 @@
 			function updateBodyScrollLock() {
 				const actionOpen = modal && modal.classList.contains('open');
 				const controlOpen = controlConfirmModal && controlConfirmModal.classList.contains('open');
-				document.body.style.overflow = actionOpen || controlOpen ? 'hidden' : '';
+				const isLocked = actionOpen || controlOpen;
+				document.body.style.overflow = isLocked ? 'hidden' : '';
+				document.body.classList.toggle('pb-modal-open', isLocked);
 			}
 
 			function setControlButtonsDisabled(disabled) {
@@ -1218,8 +1220,12 @@
 					setStatus('Logger ind...', false);
 					try {
 						const body = new URLSearchParams();
+						body.set('password', password);
 						body.set('txtLogin', password);
-						const res = await fetch('?action=planning-auth-login', {
+						const loginUrl = new URL(window.location.href);
+						loginUrl.pathname = loginUrl.pathname.replace(/\/+$/, '') || '/';
+						loginUrl.search = '?action=planning-auth-login';
+						const res = await fetch(loginUrl.toString(), {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
 							body: body.toString()
@@ -1245,8 +1251,10 @@
 							showEditorPanel();
 							setSelectedAction(currentAction);
 							setStatus('Login godkendt. Tryk på en handling for at gemme.', false);
-						} else {
+						} else if (res.status === 401) {
 							setStatus('Forkert adgangskode.', true);
+						} else {
+							setStatus('Login kunne ikke gennemføres. Prøv igen.', true);
 						}
 					} catch (_) {
 						setStatus('Login fejlede. Prøv igen.', true);
@@ -1325,6 +1333,487 @@
 		})();
 
 		(function () {
+			const menuButton = document.getElementById('pbHeaderMenuButton');
+			const menuPanel = document.getElementById('pbMenuPanel');
+			const menuIcon = document.getElementById('pbHeaderMenuIcon');
+			const logModal = document.getElementById('pbLogModal');
+			const logOutput = document.getElementById('pbLogOutput');
+			const logStatus = document.getElementById('pbLogStatus');
+			const logClose = document.getElementById('pbLogModalClose');
+			const logFilterButtons = Array.from(document.querySelectorAll('[data-log-filter]'));
+			const logSearchInput = document.getElementById('pbLogSearch');
+			const headerLoginModal = document.getElementById('pbHeaderLoginModal');
+			const headerLoginForm = document.getElementById('pbHeaderLoginForm');
+			const headerLoginPassword = document.getElementById('pbHeaderLoginPassword');
+			const headerLoginSubmit = document.getElementById('pbHeaderLoginSubmit');
+			const headerLoginStatus = document.getElementById('pbHeaderLoginStatus');
+			const headerLoginClose = document.getElementById('pbHeaderLoginClose');
+			const settingsModal = document.getElementById('pbSettingsModal');
+			const settingsClose = document.getElementById('pbSettingsModalClose');
+			const settingsStatus = document.getElementById('pbSettingsStatus');
+			const settingsActions = Array.from(document.querySelectorAll('[data-settings-action]'));
+			let isAuthorized = false;
+
+			function setMenuState(authorized) {
+				isAuthorized = !!authorized;
+				if (!menuButton) return;
+				menuButton.classList.toggle('is-locked', !isAuthorized);
+				menuButton.setAttribute('aria-label', isAuthorized ? 'Menu' : 'Log ind');
+				if (!menuIcon) return;
+				if (isAuthorized) {
+					menuIcon.innerHTML = '<span class="pb-menu-button-lines"><span></span><span></span><span></span></span>';
+				} else {
+					menuIcon.textContent = '🔒';
+				}
+			}
+
+			function closeMenuPanel() {
+				if (!menuPanel) return;
+				menuPanel.classList.remove('open');
+				menuPanel.setAttribute('aria-hidden', 'true');
+				if (menuButton) {
+					menuButton.setAttribute('aria-expanded', 'false');
+				}
+			}
+
+			function openMenuPanel() {
+				if (!menuPanel || !isAuthorized) return;
+				menuPanel.classList.add('open');
+				menuPanel.setAttribute('aria-hidden', 'false');
+				if (menuButton) {
+					menuButton.setAttribute('aria-expanded', 'true');
+				}
+			}
+
+			function openLoginModal() {
+				if (!headerLoginModal) return;
+				headerLoginModal.classList.add('open');
+				headerLoginModal.setAttribute('aria-hidden', 'false');
+				document.body.classList.add('pb-modal-open');
+				if (headerLoginPassword) {
+					window.setTimeout(() => {
+						headerLoginPassword.focus();
+						headerLoginPassword.select();
+					}, 0);
+				}
+			}
+
+			function closeLoginModal() {
+				if (!headerLoginModal) return;
+				headerLoginModal.classList.remove('open');
+				headerLoginModal.setAttribute('aria-hidden', 'true');
+				if (!document.querySelector('.pb-log-modal.open, .pb-action-modal.open')) {
+					document.body.classList.remove('pb-modal-open');
+				}
+				if (headerLoginStatus) {
+					headerLoginStatus.textContent = '';
+				}
+				if (headerLoginPassword) {
+					headerLoginPassword.value = '';
+				}
+			}
+
+			function openSettingsModal() {
+				if (!settingsModal) return;
+				settingsModal.classList.add('open');
+				settingsModal.setAttribute('aria-hidden', 'false');
+				document.body.classList.add('pb-modal-open');
+				if (settingsStatus) settingsStatus.textContent = '';
+			}
+
+			function closeSettingsModal() {
+				if (!settingsModal) return;
+				settingsModal.classList.remove('open');
+				settingsModal.setAttribute('aria-hidden', 'true');
+				if (!document.querySelector('.pb-log-modal.open, .pb-action-modal.open')) {
+					document.body.classList.remove('pb-modal-open');
+				}
+			}
+
+			let activeLogFilter = 'all';
+
+			function cleanLogLines(lines) {
+				return (Array.isArray(lines) ? lines : []).filter((line) => {
+					if (!String(line || '').trim()) return false;
+					const parsed = parseLogLine(line);
+					return !parsed || normalizeLogLevel(parsed.level) !== 'debug';
+				});
+			}
+
+			function normalizeLogLevel(levelName) {
+				const value = String(levelName || '').trim().toLowerCase();
+				if (!value) return 'info';
+				if (value === 'warn') return 'warning';
+				if (value === 'crit' || value === 'critical') return 'error';
+				if (value === 'err') return 'error';
+				if (value === 'info') return 'info';
+				if (value === 'debug') return 'debug';
+				if (value === 'warning') return 'warning';
+				if (value === 'error') return 'error';
+				return 'info';
+			}
+
+			function formatDisplayTimestamp(rawTimestamp) {
+				if (!rawTimestamp) return '—';
+				const isoMatch = String(rawTimestamp).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?/);
+				if (isoMatch) {
+					return `${isoMatch[3]}-${isoMatch[2]}-${isoMatch[1]} ${isoMatch[4]}:${isoMatch[5]}`;
+				}
+				const legacyMatch = String(rawTimestamp).match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+				if (legacyMatch) {
+					return `${legacyMatch[3]}-${legacyMatch[2]}-${legacyMatch[1]} ${legacyMatch[4]}:${legacyMatch[5]}`;
+				}
+				return String(rawTimestamp).replace(',', ' ').replace('T', ' ');
+			}
+
+			function parseLogLine(rawLine) {
+				const line = String(rawLine || '').trimEnd();
+				if (!line) {
+					return null;
+				}
+
+				const match = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})\s+(\w+)\s+(.*)$/i);
+				if (match) {
+					return {
+						timestamp: match[1],
+						level: normalizeLogLevel(match[2]),
+						message: match[3].trim(),
+					};
+				}
+
+				const fallbackMatch = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(\w+)\s+(.*)$/i);
+				if (fallbackMatch) {
+					return {
+						timestamp: fallbackMatch[1],
+						level: normalizeLogLevel(fallbackMatch[2]),
+						message: fallbackMatch[3].trim(),
+					};
+				}
+
+				const fallbackText = line.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\w+)\s+(.*)$/i);
+				if (fallbackText) {
+					return {
+						timestamp: `${fallbackText[1]} ${fallbackText[2]}`,
+						level: normalizeLogLevel(fallbackText[3]),
+						message: fallbackText[4].trim(),
+					};
+				}
+
+				return {
+					timestamp: '',
+					level: 'info',
+					message: line,
+				};
+			}
+
+			function renderLogRows(lines) {
+				if (!logOutput) return;
+				const entries = cleanLogLines(lines);
+				logOutput.innerHTML = '';
+				if (!entries.length) {
+					logOutput.innerHTML = '<div class="pb-log-line"><div class="pb-log-message">Ingen logposter matcher filteret.</div></div>';
+					return;
+				}
+
+				entries.forEach((entry) => {
+					const row = document.createElement('div');
+					row.className = 'pb-log-line';
+					const parsed = parseLogLine(entry);
+					const levelName = normalizeLogLevel((parsed && parsed.level) || 'info');
+					const levelClass = levelName === 'error' ? 'error' : levelName === 'warning' ? 'warning' : levelName === 'debug' ? 'debug' : 'info';
+					row.classList.add(`is-${levelClass}`);
+
+					const meta = document.createElement('div');
+					meta.className = 'pb-log-meta';
+
+					const ts = document.createElement('div');
+					ts.className = 'pb-log-ts';
+					ts.textContent = formatDisplayTimestamp(parsed && parsed.timestamp ? parsed.timestamp : '');
+
+					const badge = document.createElement('div');
+					badge.className = `pb-log-level ${levelClass}`;
+					badge.textContent = levelName;
+
+					const message = document.createElement('div');
+					message.className = 'pb-log-message';
+					message.textContent = parsed ? parsed.message : String(entry);
+
+					meta.append(ts, badge);
+					row.append(meta, message);
+					logOutput.appendChild(row);
+				});
+			}
+
+			function setLogFilter(nextFilter) {
+				activeLogFilter = nextFilter || 'all';
+				const rawLines = cleanLogLines(String(logOutput && logOutput.dataset.rawText || '').split(/\n/));
+				const query = (logSearchInput ? logSearchInput.value.trim().toLowerCase() : '');
+				const matchingLines = rawLines.filter((line) => !query || String(line).toLowerCase().includes(query));
+				const counts = { all: matchingLines.length, error: 0, warning: 0, info: 0, debug: 0 };
+				matchingLines.forEach((line) => {
+					const level = normalizeLogLevel((parseLogLine(line) || {}).level);
+					if (Object.prototype.hasOwnProperty.call(counts, level)) counts[level] += 1;
+				});
+				if (activeLogFilter !== 'all' && counts[activeLogFilter] === 0) activeLogFilter = 'all';
+				logFilterButtons.forEach((button) => {
+					const filter = button.getAttribute('data-log-filter') || 'all';
+					const visible = counts[filter] > 0;
+					button.hidden = !visible;
+					button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+					const matches = filter === activeLogFilter;
+					button.classList.toggle('is-active', matches);
+					button.setAttribute('aria-pressed', matches ? 'true' : 'false');
+				});
+				if (logOutput && rawLines.length) {
+					const filtered = rawLines.filter((line) => {
+						if (query && !String(line).toLowerCase().includes(query)) return false;
+						const parsed = parseLogLine(line);
+						const normalized = normalizeLogLevel(parsed ? parsed.level : 'info');
+						return activeLogFilter === 'all' || normalized === activeLogFilter;
+					});
+					renderLogRows(filtered.slice().reverse());
+				}
+			}
+
+			function setLogUnavailableState(message = 'Loggen er ikke tilgængelig. Log ind for at se data.') {
+				if (logOutput) {
+					logOutput.dataset.rawText = '';
+					logOutput.innerHTML = '';
+					const messageNode = document.createElement('div');
+					messageNode.className = 'pb-log-message';
+					messageNode.textContent = message;
+					logOutput.appendChild(messageNode);
+				}
+				logFilterButtons.forEach((button) => {
+					button.hidden = true;
+					button.setAttribute('aria-hidden', 'true');
+				});
+				if (logStatus) {
+					logStatus.textContent = 'Du skal være logget ind for at se loggen.';
+				}
+			}
+
+			async function openLogModal() {
+				if (!logModal) return;
+				logModal.classList.add('open');
+				logModal.setAttribute('aria-hidden', 'false');
+				document.body.classList.add('pb-modal-open');
+				if (logStatus) {
+					logStatus.textContent = 'Kontrollerer login...';
+				}
+				if (logOutput) {
+					logOutput.textContent = 'Kontrollerer login...';
+				}
+
+				const authOk = await refreshAuthState();
+				if (!authOk) {
+					setLogUnavailableState();
+					return;
+				}
+
+				if (logStatus) {
+					logStatus.textContent = 'Henter log...';
+				}
+				if (logOutput) {
+					logOutput.textContent = 'Henter log...';
+				}
+
+				try {
+					const currentUrl = new URL(window.location.href);
+					const basePath = currentUrl.pathname.replace(/\/+$/, '') || '/';
+					const logUrl = new URL('dashboard/logs', `${currentUrl.origin}${basePath}/`);
+					logUrl.searchParams.set('lines', '250');
+					logUrl.searchParams.set('ts', String(Date.now()));
+					const res = await fetch(logUrl.toString(), { cache: 'no-store' });
+					if (!res.ok) {
+						throw new Error('unauthorized');
+					}
+					const data = await res.json();
+					const lines = Array.isArray(data && data.lines) ? data.lines : [];
+					const rawText = cleanLogLines(lines).join('');
+					if (logOutput) {
+						logOutput.dataset.rawText = rawText;
+						const rows = rawText ? rawText.split(/\n/).filter((entry) => entry.trim()) : [];
+						renderLogRows(rows.slice().reverse());
+						if (!rows.length) {
+							logOutput.textContent = 'Ingen logdata tilgængelig.';
+						}
+					}
+					if (logStatus) logStatus.textContent = data && data.path ? `Logfil: ${data.path}` : 'Log hentet.';
+					setLogFilter(activeLogFilter);
+				} catch (_) {
+					setLogUnavailableState();
+				}
+			}
+
+			function closeLogModal() {
+				if (!logModal) return;
+				logModal.classList.remove('open');
+				logModal.setAttribute('aria-hidden', 'true');
+				if (!document.querySelector('.pb-log-modal.open, .pb-action-modal.open')) {
+					document.body.classList.remove('pb-modal-open');
+				}
+			}
+
+			async function refreshAuthState() {
+				try {
+					const res = await fetch('?action=planning-auth-status', { cache: 'no-store' });
+					if (!res.ok) {
+						setMenuState(false);
+						return false;
+					}
+					const data = await res.json();
+					const authorized = Boolean(data && data.authorized);
+					setMenuState(authorized);
+					return authorized;
+				} catch (_) {
+					setMenuState(false);
+					return false;
+				}
+			}
+
+			if (menuButton) {
+				menuButton.addEventListener('click', async () => {
+					if (!isAuthorized) {
+						openLoginModal();
+						return;
+					}
+					if (menuPanel && menuPanel.classList.contains('open')) {
+						closeMenuPanel();
+					} else {
+						openMenuPanel();
+					}
+				});
+			}
+
+			logFilterButtons.forEach((button) => {
+				button.addEventListener('click', () => {
+					setLogFilter(button.getAttribute('data-log-filter') || 'all');
+				});
+			});
+
+			if (logSearchInput) {
+				logSearchInput.addEventListener('input', () => {
+					if (logOutput && logOutput.dataset.rawText) {
+						setLogFilter(activeLogFilter);
+					}
+				});
+			}
+
+			settingsActions.forEach((button) => {
+				button.addEventListener('click', async () => {
+					const action = button.getAttribute('data-settings-action') || '';
+					if (!action || !isAuthorized) return;
+					settingsActions.forEach((item) => { item.disabled = true; });
+					if (settingsStatus) settingsStatus.textContent = 'Kører handling...';
+					try {
+						const currentUrl = new URL(window.location.href);
+						const basePath = currentUrl.pathname.replace(/\/+$/, '') || '/';
+						const actionUrl = new URL('settings/action', `${currentUrl.origin}${basePath}/`);
+						const res = await fetch(actionUrl.toString(), {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ action }),
+						});
+						const data = await res.json();
+						if (!res.ok || !data || !data.ok) {
+							throw new Error(res.status === 401 ? 'unauthorized' : 'action_failed');
+						}
+						if (settingsStatus) settingsStatus.textContent = 'Handling gennemført. Opdaterer...';
+						window.setTimeout(() => window.location.reload(), 250);
+					} catch (error) {
+						if (settingsStatus) {
+							settingsStatus.textContent = error && error.message === 'unauthorized'
+								? 'Sessionen er udløbet. Log ind igen.'
+								: 'Handlingen kunne ikke gennemføres. Prøv igen.';
+						}
+						settingsActions.forEach((item) => { item.disabled = false; });
+					}
+				});
+			});
+
+			Array.from(document.querySelectorAll('[data-menu-action]')).forEach((item) => {
+				item.addEventListener('click', () => {
+					const action = item.getAttribute('data-menu-action');
+					closeMenuPanel();
+					if (action === 'logs') {
+						openLogModal();
+					}
+					if (action === 'settings') {
+						openSettingsModal();
+					}
+				});
+			});
+
+			if (logClose) {
+				logClose.addEventListener('click', closeLogModal);
+			}
+			if (logModal) {
+				logModal.addEventListener('click', (event) => {
+					if (event.target === logModal) closeLogModal();
+				});
+			}
+			if (settingsClose) settingsClose.addEventListener('click', closeSettingsModal);
+			if (settingsModal) {
+				settingsModal.addEventListener('click', (event) => {
+					if (event.target === settingsModal) closeSettingsModal();
+				});
+			}
+			if (headerLoginClose) {
+				headerLoginClose.addEventListener('click', closeLoginModal);
+			}
+			if (headerLoginModal) {
+				headerLoginModal.addEventListener('click', (event) => {
+					if (event.target === headerLoginModal) closeLoginModal();
+				});
+			}
+			if (headerLoginForm) {
+				headerLoginForm.addEventListener('submit', async (event) => {
+					event.preventDefault();
+					if (!headerLoginPassword || !headerLoginSubmit) return;
+					const password = headerLoginPassword.value.trim();
+					if (!password) {
+						if (headerLoginStatus) headerLoginStatus.textContent = 'Indtast adgangskode.';
+						return;
+					}
+					headerLoginSubmit.disabled = true;
+					if (headerLoginStatus) headerLoginStatus.textContent = 'Logger ind...';
+					const body = new URLSearchParams();
+					body.set('password', password);
+					body.set('txtLogin', password);
+					try {
+						const loginUrl = new URL(window.location.href);
+						loginUrl.pathname = loginUrl.pathname.replace(/\/+$/, '') || '/';
+						loginUrl.search = '?action=planning-auth-login';
+						const res = await fetch(loginUrl.toString(), {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+							body: body.toString()
+						});
+						const data = await res.json();
+						if (res.ok && data && data.ok && data.authorized) {
+							setMenuState(true);
+							closeLoginModal();
+							openMenuPanel();
+							return;
+						}
+						if (headerLoginStatus) {
+							headerLoginStatus.textContent = res.status === 401
+								? 'Forkert adgangskode.'
+								: 'Login kunne ikke gennemføres. Prøv igen.';
+						}
+					} catch (_) {
+						if (headerLoginStatus) headerLoginStatus.textContent = 'Login fejlede. Prøv igen.';
+					} finally {
+						headerLoginSubmit.disabled = false;
+					}
+				});
+			}
+
+			refreshAuthState();
+		})();
+
+		(function () {
 			if (!('ontouchstart' in window) || !window.matchMedia('(pointer: coarse)').matches) {
 				return;
 			}
@@ -1334,6 +1823,7 @@
 			const indicator = document.getElementById('pullRefreshIndicator');
 			const indicatorText = document.getElementById('pullRefreshText');
 			let isPullingFromTop = false;
+			let pullRefreshBlocked = false;
 			let startY = 0;
 			let maxPull = 0;
 
@@ -1348,6 +1838,24 @@
 				}
 
 				return scrollEl.scrollWidth > (scrollEl.clientWidth + 1);
+			}
+
+			function isInteractionInsideModal(target) {
+				if (!(target instanceof Element)) {
+					return false;
+				}
+
+				if (target.closest('.pb-log-modal.open, .pb-menu-panel.open')) {
+					return true;
+				}
+
+				const openModal = document.querySelector('.pb-log-modal.open');
+				const openMenu = document.querySelector('.pb-menu-panel.open');
+				if (!openModal && !openMenu) {
+					return false;
+				}
+
+				return !!target.closest('.pb-log-modal, .pb-menu-panel');
 			}
 
 			function setIndicatorState(pullPx) {
@@ -1371,6 +1879,13 @@
 			}
 
 			window.addEventListener('touchstart', (event) => {
+				pullRefreshBlocked = isInteractionInsideModal(event.target);
+				if (pullRefreshBlocked) {
+					isPullingFromTop = false;
+					setIndicatorState(0);
+					return;
+				}
+
 				if (event.touches.length === 1 && isWithinHorizontallyScrollableChart(event.target)) {
 					isPullingFromTop = false;
 					setIndicatorState(0);
@@ -1390,6 +1905,12 @@
 			}, { passive: true });
 
 			window.addEventListener('touchmove', (event) => {
+				if (pullRefreshBlocked || isInteractionInsideModal(event.target)) {
+					isPullingFromTop = false;
+					setIndicatorState(0);
+					return;
+				}
+
 				if (!isPullingFromTop || event.touches.length !== 1) {
 					return;
 				}
@@ -1421,6 +1942,7 @@
 
 				setIndicatorState(0);
 				isPullingFromTop = false;
+				pullRefreshBlocked = false;
 				startY = 0;
 				maxPull = 0;
 			}, { passive: true });
@@ -1428,6 +1950,7 @@
 			window.addEventListener('touchcancel', () => {
 				setIndicatorState(0);
 				isPullingFromTop = false;
+				pullRefreshBlocked = false;
 				startY = 0;
 				maxPull = 0;
 			}, { passive: true });

@@ -395,8 +395,8 @@ class PowerBuddyScheduler:
             existing_prices = PriceRepository.get_by_day(day, settings.price_area)
 
             if not self._should_fetch_day(day, now, existing_prices):
-                logger.debug(
-                    "Skipping fetch for %s before day-ahead publication hour (%02d:00)",
+                logger.info(
+                    "Waiting for day-ahead prices for %s; skip fetch until %02d:00 local time",
                     day,
                     settings.day_ahead_publish_hour_local,
                 )
@@ -417,7 +417,11 @@ class PowerBuddyScheduler:
                 continue
 
             if not fetched_prices:
-                logger.debug("No prices returned for %s (may not be published yet)", day)
+                logger.warning(
+                    "No price payload returned for %s; provider may not have published it yet for local publication hour %02d:00",
+                    day,
+                    settings.day_ahead_publish_hour_local,
+                )
                 continue
 
             fetched_price_map = {
@@ -446,6 +450,35 @@ class PowerBuddyScheduler:
             logger.info("Generating daily plan for %s", day)
             soc = await self._resolve_start_soc_for_day(day)
             await self._plan_and_simulate(day, prices, soc)
+
+    async def manual_fetch_prices(self) -> int:
+        """Fetch all currently relevant days without changing existing plans."""
+        now = datetime.now(ZoneInfo(settings.timezone))
+        fetched_days = 0
+        for day in self._horizon_days_from_now():
+            try:
+                fetched = await self.price_provider.get_day_prices(day, settings.price_area)
+            except Exception as exc:
+                logger.warning("Manual price fetch failed for %s: %s", day, exc)
+                continue
+            if fetched:
+                PriceRepository.upsert_prices(fetched)
+                fetched_days += 1
+        logger.info("Manual price fetch completed for %s; fetched %d day(s)", now.date(), fetched_days)
+        return fetched_days
+
+    async def manual_generate_plan(self) -> int:
+        """Generate plans from prices already stored locally, without fetching."""
+        planned_days = 0
+        for day in self._horizon_days_from_now():
+            prices = PriceRepository.get_by_day(day, settings.price_area)
+            if not prices:
+                continue
+            soc = await self._resolve_start_soc_for_day(day)
+            await self._plan_and_simulate(day, prices, soc)
+            planned_days += 1
+        logger.info("Manual plan generation completed for %d day(s)", planned_days)
+        return planned_days
 
     async def midnight_replan_forward_horizon(self) -> None:
         """
@@ -531,6 +564,58 @@ class PowerBuddyScheduler:
         soc = await self._resolve_start_soc_for_day(target_day)
         await self._plan_and_simulate(target_day, prices, soc)
         logger.info("Daily quality gate completed for %s", target_day)
+
+    async def midnight_dummy_plan_if_needed(self) -> None:
+        """Create zero-price data and a usable plan only when tomorrow is still empty at 23:59."""
+        tz = ZoneInfo(settings.timezone)
+        now = datetime.now(tz)
+        target_day = now.date() + timedelta(days=1)
+        prices = PriceRepository.get_by_day(target_day, settings.price_area)
+
+        if self._has_full_hourly_price_shape(prices):
+            logger.info("Midnight dummy fallback skipped for %s: prices already available", target_day)
+            return
+
+        try:
+            fetched = await self.price_provider.get_day_prices(target_day, settings.price_area)
+        except Exception as exc:
+            logger.warning("Midnight final price fetch failed for %s: %s", target_day, exc)
+            fetched = []
+
+        if fetched:
+            PriceRepository.upsert_prices(fetched)
+            prices = PriceRepository.get_by_day(target_day, settings.price_area)
+
+        if self._has_full_hourly_price_shape(prices):
+            logger.info("Midnight dummy fallback skipped for %s: prices arrived on final retry", target_day)
+            soc = await self._resolve_start_soc_for_day(target_day)
+            await self._plan_and_simulate(target_day, prices, soc)
+            return
+
+        prices = [
+            PricePoint(
+                timestamp=datetime.combine(target_day, datetime.min.time()) + timedelta(hours=hour),
+                area=settings.price_area,
+                price_ore_per_kwh=0.0,
+                currency="DKK",
+                source="dummy-midnight-fallback",
+            )
+            for hour in range(24)
+        ]
+        PriceRepository.upsert_prices(prices)
+        soc = await self._resolve_start_soc_for_day(target_day)
+        await self._plan_and_simulate(target_day, prices, soc)
+        logger.warning(
+            "Created dummy zero-price fallback for %s after final 23:59 price check; manual planning remains available",
+            target_day,
+        )
+
+    @staticmethod
+    def _has_full_hourly_price_shape(prices: list[PricePoint]) -> bool:
+        return len({
+            (point.timestamp.replace(tzinfo=None) if point.timestamp.tzinfo else point.timestamp).hour
+            for point in prices
+        }) >= 24
 
     async def snapshot_power(self) -> None:
         data = await self.inverter_client.get_realtime()
@@ -985,6 +1070,15 @@ class PowerBuddyScheduler:
             hour=publish_hour,
             minute=retry_minute,
             id="daily-quality-gate-retry",
+        )
+
+        # Last-resort manual-planning fallback if tomorrow is still unpublished.
+        self.scheduler.add_job(
+            self.midnight_dummy_plan_if_needed,
+            "cron",
+            hour=23,
+            minute=59,
+            id="midnight-dummy-plan-fallback",
         )
 
         # Power snapshot every 5 minutes

@@ -10,6 +10,7 @@ import ipaddress
 import logging
 import re
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 from urllib.parse import parse_qs
@@ -55,6 +56,62 @@ from powerbuddy.services.weather import weather_forecast_service
 
 logger = logging.getLogger(__name__)
 
+
+def _is_redundant_httpx_error_log(line: str) -> bool:
+    return bool(re.search(r"\sINFO httpx: HTTP Request: .*\"HTTP/\d\.\d [45]\d\d", line))
+
+
+def resolve_log_file_path(base_dir: Path | str | None = None) -> Path:
+    if base_dir is None:
+        candidates = [Path("/var/log"), Path.cwd() / "data"]
+    elif isinstance(base_dir, Path):
+        candidates = [base_dir]
+    else:
+        candidates = [Path(base_dir)]
+
+    for candidate in candidates:
+        if candidate.name == "powerbuddy.log":
+            return candidate
+
+        log_path = candidate / "powerbuddy.log"
+        if candidate.exists():
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.touch(exist_ok=True)
+                return log_path
+            except OSError:
+                continue
+
+    fallback = Path.cwd() / "data" / "powerbuddy.log"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def configure_logging() -> Path:
+    root_logger = logging.getLogger()
+    log_path = resolve_log_file_path()
+
+    has_file_handler = any(isinstance(handler, (logging.FileHandler, RotatingFileHandler)) for handler in root_logger.handlers)
+    if not has_file_handler:
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        file_handler = RotatingFileHandler(log_path, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        root_logger.addHandler(file_handler)
+
+    if not any(isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler) for handler in root_logger.handlers):
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        stream_handler.setLevel(logging.INFO)
+        root_logger.addHandler(stream_handler)
+
+    root_logger.setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    return log_path
+
+
+configure_logging()
 
 scheduler = PowerBuddyScheduler()
 _battery_capacity_discovery_lock = asyncio.Lock()
@@ -611,13 +668,12 @@ def _dashboard_is_authorized(request: Request) -> bool:
 
     cookie_name = settings.dashboard_session_cookie
     token = request.cookies.get(cookie_name, "")
-    return _dashboard_decode_token(token, ip)
+    return any(_dashboard_decode_token(token, candidate) for candidate in _request_ip_candidates(request))
 
 
 def _dashboard_has_login_session(request: Request) -> bool:
-    ip = _request_ip(request)
     token = request.cookies.get(settings.dashboard_session_cookie, "")
-    return _dashboard_decode_token(token, ip)
+    return any(_dashboard_decode_token(token, candidate) for candidate in _request_ip_candidates(request))
 
 
 async def _discover_battery_capacity() -> None:
@@ -690,7 +746,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.10",
+    version="1.0.11",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -816,6 +872,16 @@ def index() -> dict[str, object]:
     }
 
 
+@app.get("/powerbuddy", tags=["system"], summary="PowerBuddy dashboard alias for proxied /powerbuddy route", response_class=HTMLResponse)
+async def powerbuddy_dashboard_alias(request: Request, secret: str | None = None) -> Response:
+    return await dashboard(request, secret=secret)
+
+
+@app.get("/powerbuddy/dashboard", tags=["system"], summary="PowerBuddy dashboard nested alias for proxied /powerbuddy/dashboard route", response_class=HTMLResponse)
+async def powerbuddy_dashboard_nested_alias(request: Request, secret: str | None = None) -> Response:
+    return await dashboard(request, secret=secret)
+
+
 @app.get("/dashboard", tags=["system"], summary="PowerBuddy dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, secret: str | None = None) -> Response:
     if not settings.dashboard_enabled:
@@ -927,6 +993,7 @@ def _dashboard_find_action_id_by_start_time(start_time_text: str) -> int | None:
     return None
 
 
+@app.post("/powerbuddy", tags=["system"], summary="PowerBuddy dashboard compat actions via proxy")
 @app.post("/dashboard", tags=["system"], summary="PowerBuddy dashboard compat actions")
 async def dashboard_compat_action(request: Request) -> JSONResponse:
     if not settings.dashboard_enabled:
@@ -1022,6 +1089,35 @@ async def dashboard_auth_status(request: Request) -> dict[str, object]:
         "battery_link": _dashboard_resolve_battery_link(authorized=authorized, request=request),
         "ip": _request_ip(request),
     }
+
+
+@app.get("/powerbuddy/dashboard/logs", tags=["system"], summary="Read latest dashboard logs via proxied /powerbuddy route")
+@app.get("/dashboard/logs", tags=["system"], summary="Read latest dashboard logs")
+async def dashboard_logs(request: Request, lines: int = 200) -> JSONResponse:
+    if not _dashboard_is_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    limit = max(1, min(5000, int(lines or 200)))
+    log_path = resolve_log_file_path()
+    file_lines: list[str] = []
+
+    if log_path.exists():
+        try:
+            with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                file_lines = [line for line in handle if not _is_redundant_httpx_error_log(line)]
+        except OSError:
+            file_lines = []
+
+    tail = file_lines[-limit:]
+    return JSONResponse(
+        {
+            "ok": True,
+            "path": str(log_path),
+            "count": len(tail),
+            "total": len(file_lines),
+            "lines": tail,
+        }
+    )
 
 
 @app.post(
@@ -1138,6 +1234,26 @@ async def dashboard_control(request: Request) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="Invalid command")
 
     return result
+
+
+@app.post("/dashboard/settings/action", tags=["system"], summary="Run a manual dashboard maintenance action")
+@app.post("/powerbuddy/settings/action", tags=["system"], summary="Run a manual dashboard maintenance action via proxy")
+async def dashboard_settings_action(request: Request) -> dict[str, object]:
+    if not _dashboard_is_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    payload = await request.json()
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "fetch-prices":
+        count = await scheduler.manual_fetch_prices()
+        return {"ok": True, "action": action, "days": count}
+    if action == "generate-plan":
+        count = await scheduler.manual_generate_plan()
+        return {"ok": True, "action": action, "days": count}
+    if action == "refresh-and-plan":
+        await scheduler.refresh_prices_and_replan()
+        return {"ok": True, "action": action}
+    raise HTTPException(status_code=400, detail="Invalid settings action")
 
 
 @app.post("/dashboard/planning/action/{action_id}", tags=["planning"], summary="Dashboard update plan action")
