@@ -16,6 +16,7 @@ class PriceOut(BaseModel):
     # Retail total price including transport/network component and VAT.
     price_with_fees_ore_per_kwh: float | None = None
     currency: str
+    source: str | None = None
 
 
 class InverterRealtime(BaseModel):

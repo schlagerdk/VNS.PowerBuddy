@@ -18,6 +18,13 @@ class PricePoint(Base):
     source: Mapped[str] = mapped_column(String(64), default="energidataservice")
 
 
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256))
+
+
 class PowerSnapshot(Base):
     __tablename__ = "power_snapshots"
 

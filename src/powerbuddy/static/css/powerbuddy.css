@@ -11,6 +11,8 @@
 			--cat-high-b: #ea580c;
 			--cat-peak-a: #b91c1c;
 			--cat-peak-b: #991b1b;
+			--cat-dummy-a: #8b5cf6;
+			--cat-dummy-b: #6d28d9;
 			--bg-dark: #0f172a;
 			--bg-card: #1e293b;
 			--line: #334155;
@@ -287,6 +289,44 @@
 			color: #94a3b8;
 			font-size: 11px;
 			font-weight: 400;
+		}
+
+		.pb-settings-toggle {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			margin-top: 14px;
+			padding: 13px 14px;
+			border: 1px solid rgba(148, 163, 184, 0.28);
+			border-radius: 10px;
+			background: rgba(30, 41, 59, 0.9);
+			color: #e2e8f0;
+			cursor: pointer;
+		}
+
+		.pb-settings-toggle strong,
+		.pb-settings-toggle small {
+			display: block;
+		}
+
+		.pb-settings-toggle strong {
+			font-size: 13px;
+		}
+
+		.pb-settings-toggle small {
+			margin-top: 3px;
+			color: #94a3b8;
+			font-size: 11px;
+			font-weight: 400;
+		}
+
+		.pb-settings-toggle input {
+			width: 42px;
+			height: 24px;
+			margin: 0;
+			accent-color: #36d1a5;
+			cursor: pointer;
 		}
 
 		.pb-log-modal-head {
@@ -2328,6 +2368,16 @@
 			background: linear-gradient(180deg, var(--cat-peak-a) 0%, var(--cat-peak-b) 100%);
 			border-color: rgba(185, 28, 28, 0.76);
 			box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 -10px 16px rgba(0, 0, 0, 0.15), 0 16px 28px rgba(153, 27, 27, 0.4);
+		}
+
+		.bar.dummy {
+			background: linear-gradient(180deg, var(--cat-dummy-a) 0%, var(--cat-dummy-b) 100%);
+			border-color: rgba(167, 139, 250, 0.75);
+			box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -10px 16px rgba(0, 0, 0, 0.14), 0 12px 22px rgba(109, 40, 217, 0.28);
+		}
+
+		.bar-wrapper.is-dummy .bar-flag {
+			display: none !important;
 		}
 
 		.bar-flag {

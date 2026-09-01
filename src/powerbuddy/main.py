@@ -26,7 +26,7 @@ from powerbuddy.config import set_detected_battery_capacity_kwh, settings
 from powerbuddy.dashboard_ui import render_dashboard_html
 from powerbuddy.database import init_db
 from powerbuddy.models import PlanAction, PricePoint
-from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
+from powerbuddy.repositories import AppSettingsRepository, KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.schemas import (
     InverterRealtime,
     ManualOverrideIn,
@@ -436,6 +436,7 @@ def _dashboard_apply_plan_state(
     current_price_kr: float | None = None
 
     normalized_prices: dict[datetime, float] = {}
+    source_by_slot: dict[datetime, str] = {}
     for point in prices:
         ts = point.timestamp
         if ts.tzinfo is not None:
@@ -450,6 +451,7 @@ def _dashboard_apply_plan_state(
         if raw_price_ore is None:
             raw_price_ore = point.price_ore_per_kwh
         normalized_prices[slot_local] = float(raw_price_ore)
+        source_by_slot[slot_local] = (point.source or "").strip()
 
     slot_meta_by_key: dict[str, tuple[str, float]] = {}
     sorted_slots = sorted(normalized_prices.keys())
@@ -462,7 +464,9 @@ def _dashboard_apply_plan_state(
         threshold2 = min_value + (value_range * 0.50)
         threshold3 = min_value + (value_range * 0.75)
 
-        def _price_category(value: float) -> str:
+        def _price_category(value: float, source_name: str = "") -> str:
+            if "dummy" in source_name.lower():
+                return "dummy"
             if value <= threshold1:
                 return "low"
             if value <= threshold2:
@@ -471,13 +475,20 @@ def _dashboard_apply_plan_state(
                 return "high"
             return "peak"
 
-        cheapest_slot = min(sorted_slots, key=lambda slot: normalized_prices[slot])
-        priciest_slot = max(sorted_slots, key=lambda slot: normalized_prices[slot])
+        non_dummy_slots = [slot for slot in sorted_slots if "dummy" not in source_by_slot.get(slot, "").lower()]
+        if non_dummy_slots:
+            cheapest_slot = min(non_dummy_slots, key=lambda slot: normalized_prices[slot])
+            priciest_slot = max(non_dummy_slots, key=lambda slot: normalized_prices[slot])
+        else:
+            cheapest_slot = None
+            priciest_slot = None
         bars: list[str] = []
         previous_day: date | None = None
         for idx, slot in enumerate(sorted_slots):
             price_ore = normalized_prices[slot]
-            category = _price_category(price_ore)
+            source_name = source_by_slot.get(slot, "")
+            is_dummy = "dummy" in source_name.lower()
+            category = _price_category(price_ore, source_name)
             slot_key = slot.strftime("%Y-%m-%dT%H.%M.%S")
             action_name, action_id = action_map.get(slot_key, ("", ""))
             action_label = _dashboard_action_label(action_name)
@@ -497,18 +508,20 @@ def _dashboard_apply_plan_state(
                     boundary_text = "I MORGEN"
                 else:
                     boundary_text = slot.strftime("%d/%m")
-                boundary_badge = f'\n\t\t\t\t\t\t\t\t<span class="day-boundary-badge">{boundary_text}</span>'
+                boundary_badge = f'\n\t\t\t\t\t\t\t\t\t\t<span class="day-boundary-badge">{boundary_text}</span>'
 
-            if value_range <= 0.0:
+            if is_dummy:
+                height_percent = 50.0
+            elif value_range <= 0.0:
                 height_percent = 55.0
             else:
                 height_percent = 10.0 + (((price_ore - min_value) / value_range) * 90.0)
 
             flag_html = ""
-            if slot == cheapest_slot:
-                flag_html += '\n\t\t\t\t\t\t\t\t\t<span class="bar-flag low">Billigste</span>'
-            if slot == priciest_slot:
-                flag_html += '\n\t\t\t\t\t\t\t\t\t<span class="bar-flag peak">Dyreste</span>'
+            if not is_dummy and slot == cheapest_slot:
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag low">Billigste</span>'
+            if not is_dummy and slot == priciest_slot:
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag peak">Dyreste</span>'
 
             action_icon_html = ""
             editable_class = ""
@@ -516,24 +529,26 @@ def _dashboard_apply_plan_state(
                 editable_class = "is-action-editable"
                 action_icon_html = "\n".join(
                     [
-                        f'\t\t\t\t\t\t\t<span class="bar-action-icon {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">',
-                        f"\t\t\t\t\t\t\t\t{action_icon}",
-                        "\t\t\t\t\t\t\t</span>",
+                        f'\t\t\t\t\t\t\t\t<span class="bar-action-icon {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">',
+                        f"\t\t\t\t\t\t\t\t\t{action_icon}",
+                        "\t\t\t\t\t\t\t\t</span>",
                     ]
                 )
 
+            wrapper_classes = f"bar-wrapper {day_class} {boundary_class} {editable_class} {'is-dummy' if is_dummy else ''}".strip()
+            price_value_html = "" if is_dummy else f'\t\t\t\t\t\t\t\t\t<span class="bar-value">{price_text}</span>'
             bars.append(
                 "\n".join(
                     [
-                        f'\t\t\t\t\t\t<div class="bar-wrapper {day_class} {boundary_class} {editable_class}" data-day="{day_class}" data-index="{idx}" data-category="{category}" data-price="{price_ore:.4f}" data-action="{action_name}" data-action-id="{action_id}" data-start-time="{slot_key}" data-hour-label="{hour_label}">',
+                        f'\t\t\t\t\t\t\t<div class="{wrapper_classes}" data-day="{day_class}" data-index="{idx}" data-category="{category}" data-price="{price_ore:.4f}" data-action="{action_name}" data-action-id="{action_id}" data-start-time="{slot_key}" data-hour-label="{hour_label}" data-source="{source_name}">',
                         f"{boundary_badge}" if boundary_badge else "",
-                        f'\t\t\t\t\t\t\t<div class="bar {category}" style="height: {height_percent:.1f}%;" aria-label="{hour_label} - {price_text} kr">',
+                        f'\t\t\t\t\t\t\t\t<div class="bar {category}" style="height: {height_percent:.1f}%;" aria-label="{hour_label} - {price_text} kr">',
                         f"{flag_html}" if flag_html else "",
-                        f'\t\t\t\t\t\t\t\t<span class="bar-value">{price_text}</span>',
-                        "\t\t\t\t\t\t\t</div>",
+                        price_value_html,
+                        "\t\t\t\t\t\t\t\t</div>",
                         f"{action_icon_html}" if action_icon_html else "",
-                        f'\t\t\t\t\t\t\t<div class="hour-label">{hour_text}<span class="hour-zero">:00</span></div>',
-                        "\t\t\t\t\t\t</div>",
+                        f'\t\t\t\t\t\t\t\t<div class="hour-label">{hour_text}<span class="hour-zero">:00</span></div>',
+                        "\t\t\t\t\t\t\t</div>",
                     ]
                 )
             )
@@ -542,12 +557,20 @@ def _dashboard_apply_plan_state(
             previous_day = slot.date()
 
         bars_html = "\n".join(part for part in bars if part)
-        html = re.sub(
+        replacement = re.sub(
             r'(<div class="chart-bars">\s*)([\s\S]*?)(\s*</div>\s*</div>\s*</div>)',
             rf'\1\n{bars_html}\n\t\t\t\t\t\3',
             html,
             count=1,
         )
+        if replacement != html:
+            html = replacement
+        elif '<div class="chart-bars"></div>' in html:
+            html = html.replace(
+                '<div class="chart-bars"></div>',
+                f'<div class="chart-bars">\n{bars_html}\n</div>',
+                1,
+            )
 
     current_meta = slot_meta_by_key.get(current_slot_key)
     if current_meta is not None:
@@ -729,6 +752,10 @@ async def _discover_battery_capacity() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    saved_dummy_prices = AppSettingsRepository.get_bool("allow_dummy_prices")
+    if saved_dummy_prices is not None:
+        settings.allow_dummy_prices = saved_dummy_prices
+    PriceRepository.clean_stale_dummy_prices()
     await _discover_battery_capacity()
     scheduler.start()
     yield
@@ -746,7 +773,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.11",
+    version="1.0.12",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -1244,6 +1271,26 @@ async def dashboard_settings_action(request: Request) -> dict[str, object]:
 
     payload = await request.json()
     action = str(payload.get("action") or "").strip().lower()
+    if action == "dummy-prices-status":
+        return {"ok": True, "action": action, "enabled": settings.allow_dummy_prices}
+    if action == "set-dummy-prices":
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="enabled must be a boolean")
+        AppSettingsRepository.set_bool("allow_dummy_prices", enabled)
+        settings.allow_dummy_prices = enabled
+        deleted_prices = 0 if enabled else PriceRepository.delete_dummy_prices()
+        logger.info(
+            "Dummy price fallback %s from dashboard settings; removed %d stored dummy price(s)",
+            "enabled" if enabled else "disabled",
+            deleted_prices,
+        )
+        return {
+            "ok": True,
+            "action": action,
+            "enabled": settings.allow_dummy_prices,
+            "deleted_prices": deleted_prices,
+        }
     if action == "fetch-prices":
         count = await scheduler.manual_fetch_prices()
         return {"ok": True, "action": action, "days": count}
@@ -1340,9 +1387,18 @@ async def _resolve_start_soc_for_day(day: date) -> float:
 async def _ensure_prices_with_fallback(requested_day: date) -> tuple[date, list, bool]:
     prices = PriceRepository.get_by_day(requested_day, settings.price_area)
     provider = get_price_provider()
+    now_local = datetime.now(ZoneInfo(settings.timezone))
+    publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+    today = now_local.date()
+    tomorrow = today + timedelta(days=1)
 
-    if not prices:
-        fetched = await provider.get_day_prices(requested_day, settings.price_area)
+    can_fetch = (requested_day == today) or (requested_day == tomorrow and now_local.hour >= publish_hour)
+
+    if not prices and can_fetch:
+        try:
+            fetched = await provider.get_day_prices(requested_day, settings.price_area)
+        except Exception:
+            fetched = []
         if fetched:
             PriceRepository.upsert_prices(fetched)
             prices = PriceRepository.get_by_day(requested_day, settings.price_area)
@@ -1367,15 +1423,33 @@ async def _ensure_prices_with_fallback(requested_day: date) -> tuple[date, list,
 async def _ensure_prices_for_window(start: datetime, end: datetime) -> None:
     """
     Ensure we have stored prices for every calendar day touched by [start, end).
+    Network fetch is strictly limited to today and tomorrow (after publish hour).
     """
     provider = get_price_provider()
+    now_local = datetime.now(ZoneInfo(settings.timezone))
+    publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+    today = now_local.date()
+    tomorrow = today + timedelta(days=1)
+
     current_day = start.date()
     end_day = (end - timedelta(seconds=1)).date()
 
     while current_day <= end_day:
+        if current_day > tomorrow:
+            current_day += timedelta(days=1)
+            continue
+        if current_day == tomorrow and now_local.hour < publish_hour:
+            current_day += timedelta(days=1)
+            continue
+
         existing = PriceRepository.get_by_day(current_day, settings.price_area)
-        if not existing:
-            fetched = await provider.get_day_prices(current_day, settings.price_area)
+        has_real_prices = any(not p.source.lower().startswith("dummy") for p in existing) and len(existing) >= 24
+        if not has_real_prices:
+            try:
+                fetched = await provider.get_day_prices(current_day, settings.price_area)
+            except Exception as exc:
+                logger.warning("Price fetch for %s failed: %s", current_day, exc)
+                fetched = []
             if fetched:
                 PriceRepository.upsert_prices(fetched)
         current_day += timedelta(days=1)
@@ -1384,31 +1458,37 @@ async def _ensure_prices_for_window(start: datetime, end: datetime) -> None:
 async def _discover_latest_released_day_from(start_day: date) -> date | None:
     """
     Discover latest released day from `start_day` forward by probing providers day-by-day.
-
-    This is more reliable than provider metadata methods for sources that only report
-    latest historical day and not latest future published day.
+    Spot prices can only exist for today and tomorrow (from 13:00 local time).
     """
     provider = get_price_provider()
-    max_days_ahead = max(2, int(settings.price_fetch_days_ahead))
     latest_released: date | None = None
+    now_local = datetime.now(ZoneInfo(settings.timezone))
+    publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+    today = now_local.date()
+    tomorrow = today + timedelta(days=1)
 
-    for offset in range(0, max_days_ahead + 1):
+    for offset in (0, 1):
         day = start_day + timedelta(days=offset)
+        if day > tomorrow:
+            break
         prices = PriceRepository.get_by_day(day, settings.price_area)
-        if not prices:
-            try:
-                fetched = await provider.get_day_prices(day, settings.price_area)
-            except Exception:
-                fetched = []
-            if fetched:
-                PriceRepository.upsert_prices(fetched)
-                prices = PriceRepository.get_by_day(day, settings.price_area)
+        has_real_prices = any(not p.source.lower().startswith("dummy") for p in prices) and len(prices) >= 24
+
+        if not has_real_prices:
+            can_fetch = (day == today) or (day == tomorrow and now_local.hour >= publish_hour)
+            if can_fetch:
+                try:
+                    fetched = await provider.get_day_prices(day, settings.price_area)
+                except Exception:
+                    fetched = []
+                if fetched:
+                    PriceRepository.upsert_prices(fetched)
+                    prices = PriceRepository.get_by_day(day, settings.price_area)
 
         if prices:
             latest_released = day
             continue
 
-        # Day-ahead publication is contiguous in practice; stop at first missing future day.
         if day > start_day:
             break
 
@@ -1527,9 +1607,18 @@ async def _load_best_fallback_profile(day: date) -> tuple[list[PricePoint], bool
 async def _get_day_prices_with_provisional_fallback(day: date) -> tuple[list[PricePoint], bool]:
     prices = PriceRepository.get_by_day(day, settings.price_area)
     provider = get_price_provider()
+    now_local = datetime.now(ZoneInfo(settings.timezone))
+    publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+    today = now_local.date()
+    tomorrow = today + timedelta(days=1)
 
-    if not prices:
-        fetched = await provider.get_day_prices(day, settings.price_area)
+    can_fetch = (day == today) or (day == tomorrow and now_local.hour >= publish_hour)
+
+    if not prices and can_fetch:
+        try:
+            fetched = await provider.get_day_prices(day, settings.price_area)
+        except Exception:
+            fetched = []
         if fetched:
             PriceRepository.upsert_prices(fetched)
             prices = PriceRepository.get_by_day(day, settings.price_area)
@@ -1970,11 +2059,22 @@ async def get_prices(
     Backward-compatible behavior: if target_date is provided, return that day's
     prices (00:00..24:00).
     """
+    now_local = datetime.now(ZoneInfo(settings.timezone))
+    PriceRepository.clean_stale_dummy_prices(now_local)
+
     if target_date is not None:
         prices = PriceRepository.get_by_day(target_date, settings.price_area)
-        if not prices:
+        publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
+        today = now_local.date()
+        tomorrow = today + timedelta(days=1)
+        can_fetch = (target_date == today) or (target_date == tomorrow and now_local.hour >= publish_hour)
+
+        if not prices and can_fetch:
             provider = get_price_provider()
-            fetched = await provider.get_day_prices(target_date, settings.price_area)
+            try:
+                fetched = await provider.get_day_prices(target_date, settings.price_area)
+            except Exception:
+                fetched = []
             if fetched:
                 PriceRepository.upsert_prices(fetched)
                 prices = PriceRepository.get_by_day(target_date, settings.price_area)
@@ -1986,6 +2086,10 @@ async def get_prices(
         else:
             start = from_timestamp.astimezone(timezone.utc)
         start = start.replace(minute=0, second=0, microsecond=0)
+
+        if now_local.hour >= 14 and start.date() == now_local.date():
+            tomorrow = start.date() + timedelta(days=1)
+            await scheduler._ensure_dummy_future_prices_if_needed(tomorrow, now_local)
 
         if hours is not None:
             horizon_hours = max(1, min(int(hours), 72))
@@ -2090,6 +2194,7 @@ async def get_prices(
                 price_without_fees_ore_per_kwh=without_fees,
                 price_with_fees_ore_per_kwh=with_fees,
                 currency=p.currency,
+                source=(p.source or "").strip() or None,
             )
         )
 

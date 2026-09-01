@@ -94,7 +94,12 @@ class ElprisenLigeNuProvider(PriceProvider):
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.get(url)
             if response.status_code == 404:
-                logger.error("Price data unavailable for %s in %s: HTTP 404 Not Found (%s)", day, area, url)
+                logger.warning(
+                    "Price data not yet published for %s in %s: HTTP 404 Not Found (%s)",
+                    day,
+                    area,
+                    url,
+                )
                 return []
             if response.status_code >= 400:
                 logger.error("Price data fetch failed for %s in %s: HTTP %s (%s)", day, area, response.status_code, url)

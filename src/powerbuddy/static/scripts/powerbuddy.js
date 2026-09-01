@@ -1352,6 +1352,7 @@
 			const settingsClose = document.getElementById('pbSettingsModalClose');
 			const settingsStatus = document.getElementById('pbSettingsStatus');
 			const settingsActions = Array.from(document.querySelectorAll('[data-settings-action]'));
+			const dummyPricesToggle = document.getElementById('pbDummyPricesToggle');
 			let isAuthorized = false;
 
 			function setMenuState(authorized) {
@@ -1419,6 +1420,42 @@
 				settingsModal.setAttribute('aria-hidden', 'false');
 				document.body.classList.add('pb-modal-open');
 				if (settingsStatus) settingsStatus.textContent = '';
+				loadDummyPriceSetting();
+			}
+
+			function settingsActionUrl() {
+				const currentUrl = new URL(window.location.href);
+				const basePath = currentUrl.pathname.replace(/\/+$/, '') || '/';
+				return new URL('settings/action', `${currentUrl.origin}${basePath}/`);
+			}
+
+			async function postSettingsAction(payload) {
+				const res = await fetch(settingsActionUrl().toString(), {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload),
+				});
+				const data = await res.json().catch(() => null);
+				if (!res.ok || !data || !data.ok) {
+					const detail = data && (data.detail || data.error);
+					throw new Error(detail || (res.status === 401 ? 'unauthorized' : 'settings_failed'));
+				}
+				return data;
+			}
+
+			async function loadDummyPriceSetting() {
+				if (!dummyPricesToggle || !isAuthorized) return;
+				dummyPricesToggle.disabled = true;
+				try {
+					const data = await postSettingsAction({ action: 'dummy-prices-status' });
+					dummyPricesToggle.checked = Boolean(data.enabled);
+				} catch (error) {
+					if (settingsStatus) settingsStatus.textContent = error && error.message === 'unauthorized'
+						? 'Sessionen er udløbet. Log ind igen.'
+						: `Indstillingen kunne ikke hentes: ${error && error.message ? error.message : 'ukendt fejl'}.`;
+				} finally {
+					dummyPricesToggle.disabled = false;
+				}
 			}
 
 			function closeSettingsModal() {
@@ -1707,18 +1744,7 @@
 					settingsActions.forEach((item) => { item.disabled = true; });
 					if (settingsStatus) settingsStatus.textContent = 'Kører handling...';
 					try {
-						const currentUrl = new URL(window.location.href);
-						const basePath = currentUrl.pathname.replace(/\/+$/, '') || '/';
-						const actionUrl = new URL('settings/action', `${currentUrl.origin}${basePath}/`);
-						const res = await fetch(actionUrl.toString(), {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ action }),
-						});
-						const data = await res.json();
-						if (!res.ok || !data || !data.ok) {
-							throw new Error(res.status === 401 ? 'unauthorized' : 'action_failed');
-						}
+						await postSettingsAction({ action });
 						if (settingsStatus) settingsStatus.textContent = 'Handling gennemført. Opdaterer...';
 						window.setTimeout(() => window.location.reload(), 250);
 					} catch (error) {
@@ -1731,6 +1757,26 @@
 					}
 				});
 			});
+
+			if (dummyPricesToggle) {
+				dummyPricesToggle.addEventListener('change', async () => {
+					if (!isAuthorized) return;
+					const enabled = dummyPricesToggle.checked;
+					dummyPricesToggle.disabled = true;
+					try {
+						const data = await postSettingsAction({ action: 'set-dummy-prices', enabled });
+						dummyPricesToggle.checked = Boolean(data.enabled);
+						if (settingsStatus) settingsStatus.textContent = '';
+					} catch (error) {
+						dummyPricesToggle.checked = !enabled;
+						if (settingsStatus) settingsStatus.textContent = error && error.message === 'unauthorized'
+							? 'Sessionen er udløbet. Log ind igen.'
+							: `Indstillingen kunne ikke gemmes: ${error && error.message ? error.message : 'ukendt fejl'}.`;
+					} finally {
+						dummyPricesToggle.disabled = false;
+					}
+				});
+			}
 
 			Array.from(document.querySelectorAll('[data-menu-action]')).forEach((item) => {
 				item.addEventListener('click', () => {

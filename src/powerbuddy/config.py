@@ -587,6 +587,11 @@ class Settings(BaseSettings):
         default=False,
         alias="POWERBUDDY_ALLOW_PROVISIONAL_PLANS",
     )
+    # Manual control: allow fallback dummy prices when real prices are unavailable after 14:00.
+    allow_dummy_prices: bool = Field(
+        default=False,
+        alias="POWERBUDDY_ALLOW_DUMMY_PRICES",
+    )
 
     # Retail price-model calibration (excl. VAT):
     # - supplier markup added on top of spot ("without transport/afgifter" in UI)

@@ -122,6 +122,47 @@ class PowerBuddyScheduler:
         self._last_executed_at = None
         await self.execute_current_plan_action()
 
+    @staticmethod
+    def _has_full_hourly_price_shape(prices: list[PricePoint]) -> bool:
+        return len({
+            (point.timestamp.replace(tzinfo=None) if point.timestamp.tzinfo else point.timestamp).hour
+            for point in prices
+        }) >= 24
+
+    @staticmethod
+    def _build_dummy_prices_for_day(day: date, source: str = "dummy-future-fallback") -> list[PricePoint]:
+        return [
+            PricePoint(
+                timestamp=datetime.combine(day, datetime.min.time()) + timedelta(hours=hour),
+                area=settings.price_area,
+                price_ore_per_kwh=0.0,
+                currency="DKK",
+                source=source,
+            )
+            for hour in range(24)
+        ]
+
+    async def _ensure_dummy_future_prices_if_needed(self, day: date, now: datetime) -> bool:
+        if not settings.allow_dummy_prices:
+            return False
+        tomorrow = now.date() + timedelta(days=1)
+        if day != tomorrow:
+            return False
+        if now.hour < 14:
+            return False
+
+        prices = PriceRepository.get_by_day(day, settings.price_area)
+        if self._has_full_hourly_price_shape(prices):
+            return False
+
+        dummy_prices = self._build_dummy_prices_for_day(day)
+        PriceRepository.upsert_prices(dummy_prices)
+        logger.warning(
+            "Created dummy zero-price fallback for %s after 14:00 because real day-ahead prices are still unavailable; they will be replaced automatically when published",
+            day,
+        )
+        return True
+
     async def _plan_and_simulate(self, day: date, prices: list[PricePoint], soc: float, lock_hours: int = 0) -> None:
         tz = ZoneInfo(settings.timezone)
         now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
@@ -337,40 +378,27 @@ class PowerBuddyScheduler:
 
     def _horizon_days_from_now(self) -> list[date]:
         """
-        Return calendar days that must be covered by plans from current time
-        and at least 48h forward.
+        Return calendar days that should be considered: today and tomorrow.
+        Spot prices can only exist for today and tomorrow.
         """
-        now = datetime.now()
-        horizon_hours = max(48, int(settings.planning_horizon_hours))
-        horizon_end = now + timedelta(hours=horizon_hours)
-
-        # Keep compatibility with explicit day-ahead prefetch setting.
-        configured_end = now + timedelta(days=max(0, int(settings.price_fetch_days_ahead)))
-        end_date = max(horizon_end.date(), configured_end.date())
-
-        # Also include all future days for which released prices already exist locally.
-        latest_stored_day = PriceRepository.get_latest_day(settings.price_area)
-        if latest_stored_day is not None:
-            end_date = max(end_date, latest_stored_day)
-
-        days: list[date] = []
-        current = now.date()
-        while current <= end_date:
-            days.append(current)
-            current += timedelta(days=1)
-        return days
+        now = datetime.now(ZoneInfo(settings.timezone))
+        today = now.date()
+        return [today, today + timedelta(days=1)]
 
     def _should_fetch_day(self, target_day: date, now: datetime, existing_prices: list[PricePoint]) -> bool:
         """
         Price cadence:
         - Today's spot prices are relevant all day; keep refreshing.
-        - Future day prices are typically published around 13:00 local time.
-          Before that, only refresh if we already have prices stored for that day.
+        - Tomorrow's spot prices are published around 13:00 local time; never fetch before 13:00.
+        - Days beyond tomorrow NEVER have spot prices published; never fetch.
         """
-        if target_day <= now.date():
-            return True
+        today = now.date()
+        tomorrow = today + timedelta(days=1)
 
-        if existing_prices:
+        if target_day < today or target_day > tomorrow:
+            return False
+
+        if target_day == today:
             return True
 
         publish_hour = min(23, max(0, int(settings.day_ahead_publish_hour_local)))
@@ -388,7 +416,9 @@ class PowerBuddyScheduler:
         Once a plan is generated for a given set of prices, it remains locked
         until prices for that day change.
         """
-        now = datetime.now()
+        tz = ZoneInfo(settings.timezone)
+        now = datetime.now(tz).replace(tzinfo=None)
+        PriceRepository.clean_stale_dummy_prices(datetime.now(tz))
         days_to_fetch = self._horizon_days_from_now()
 
         for day in days_to_fetch:
@@ -417,6 +447,14 @@ class PowerBuddyScheduler:
                 continue
 
             if not fetched_prices:
+                if day == (now.date() + timedelta(days=1)) and now.hour >= 14:
+                    created_dummy = await self._ensure_dummy_future_prices_if_needed(day, now)
+                    if created_dummy:
+                        prices = PriceRepository.get_by_day(day, settings.price_area)
+                        if prices:
+                            soc = await self._resolve_start_soc_for_day(day)
+                            await self._plan_and_simulate(day, prices, soc)
+                        continue
                 logger.warning(
                     "No price payload returned for %s; provider may not have published it yet for local publication hour %02d:00",
                     day,
@@ -456,6 +494,14 @@ class PowerBuddyScheduler:
         now = datetime.now(ZoneInfo(settings.timezone))
         fetched_days = 0
         for day in self._horizon_days_from_now():
+            existing_prices = PriceRepository.get_by_day(day, settings.price_area)
+            if not self._should_fetch_day(day, now, existing_prices):
+                logger.info(
+                    "Manual price fetch skipped for %s until %02d:00 local time",
+                    day,
+                    settings.day_ahead_publish_hour_local,
+                )
+                continue
             try:
                 fetched = await self.price_provider.get_day_prices(day, settings.price_area)
             except Exception as exc:
@@ -565,8 +611,48 @@ class PowerBuddyScheduler:
         await self._plan_and_simulate(target_day, prices, soc)
         logger.info("Daily quality gate completed for %s", target_day)
 
+    async def afternoon_dummy_plan_if_needed(self) -> None:
+        """Create zero-price fallback for tomorrow once 14:00 has passed and real prices are still missing."""
+        if not settings.allow_dummy_prices:
+            return
+
+        tz = ZoneInfo(settings.timezone)
+        now = datetime.now(tz)
+        target_day = now.date() + timedelta(days=1)
+
+        prices = PriceRepository.get_by_day(target_day, settings.price_area)
+        has_real_prices = any(not p.source.lower().startswith("dummy") for p in prices) and self._has_full_hourly_price_shape(prices)
+        if has_real_prices:
+            return
+
+        try:
+            fetched = await self.price_provider.get_day_prices(target_day, settings.price_area)
+        except Exception as exc:
+            logger.warning("Afternoon price check failed for %s: %s", target_day, exc)
+            fetched = []
+
+        if fetched:
+            PriceRepository.upsert_prices(fetched)
+            prices = PriceRepository.get_by_day(target_day, settings.price_area)
+            if self._has_full_hourly_price_shape(prices):
+                soc = await self._resolve_start_soc_for_day(target_day)
+                await self._plan_and_simulate(target_day, prices, soc)
+                return
+
+        dummy_prices = self._build_dummy_prices_for_day(target_day, source="dummy-afternoon-fallback")
+        PriceRepository.upsert_prices(dummy_prices)
+        soc = await self._resolve_start_soc_for_day(target_day)
+        await self._plan_and_simulate(target_day, dummy_prices, soc)
+        logger.warning(
+            "Created dummy zero-price fallback for %s at local 14:00 because day-ahead prices are still unavailable; real prices will replace them automatically",
+            target_day,
+        )
+
     async def midnight_dummy_plan_if_needed(self) -> None:
         """Create zero-price data and a usable plan only when tomorrow is still empty at 23:59."""
+        if not settings.allow_dummy_prices:
+            return
+
         tz = ZoneInfo(settings.timezone)
         now = datetime.now(tz)
         target_day = now.date() + timedelta(days=1)
@@ -592,16 +678,7 @@ class PowerBuddyScheduler:
             await self._plan_and_simulate(target_day, prices, soc)
             return
 
-        prices = [
-            PricePoint(
-                timestamp=datetime.combine(target_day, datetime.min.time()) + timedelta(hours=hour),
-                area=settings.price_area,
-                price_ore_per_kwh=0.0,
-                currency="DKK",
-                source="dummy-midnight-fallback",
-            )
-            for hour in range(24)
-        ]
+        prices = self._build_dummy_prices_for_day(target_day, source="dummy-midnight-fallback")
         PriceRepository.upsert_prices(prices)
         soc = await self._resolve_start_soc_for_day(target_day)
         await self._plan_and_simulate(target_day, prices, soc)
@@ -609,13 +686,6 @@ class PowerBuddyScheduler:
             "Created dummy zero-price fallback for %s after final 23:59 price check; manual planning remains available",
             target_day,
         )
-
-    @staticmethod
-    def _has_full_hourly_price_shape(prices: list[PricePoint]) -> bool:
-        return len({
-            (point.timestamp.replace(tzinfo=None) if point.timestamp.tzinfo else point.timestamp).hour
-            for point in prices
-        }) >= 24
 
     async def snapshot_power(self) -> None:
         data = await self.inverter_client.get_realtime()
@@ -1073,6 +1143,15 @@ class PowerBuddyScheduler:
         )
 
         # Last-resort manual-planning fallback if tomorrow is still unpublished.
+        # Deterministic afternoon fallback at 14:00 when future day-ahead prices are still missing.
+        self.scheduler.add_job(
+            self.afternoon_dummy_plan_if_needed,
+            "cron",
+            hour=14,
+            minute=0,
+            id="afternoon-dummy-plan-fallback",
+        )
+
         self.scheduler.add_job(
             self.midnight_dummy_plan_if_needed,
             "cron",

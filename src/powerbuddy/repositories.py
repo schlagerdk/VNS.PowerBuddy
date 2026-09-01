@@ -4,14 +4,127 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete, desc, func, select
 
+from powerbuddy.config import settings
 from powerbuddy.database import SessionLocal
-from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot, PricePoint, SimulationPoint
+from powerbuddy.models import AppSetting, PlanAction, PlannerKPI, PowerSnapshot, PricePoint, SimulationPoint
+
+
+class AppSettingsRepository:
+    @staticmethod
+    def get_bool(key: str) -> bool | None:
+        with SessionLocal() as session:
+            setting = session.get(AppSetting, key)
+            if setting is None:
+                return None
+            return setting.value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def set_bool(key: str, value: bool) -> None:
+        with SessionLocal() as session:
+            setting = session.get(AppSetting, key)
+            if setting is None:
+                session.add(AppSetting(key=key, value="true" if value else "false"))
+            else:
+                setting.value = "true" if value else "false"
+            session.commit()
 
 
 class PriceRepository:
     @staticmethod
+    def delete_dummy_prices() -> int:
+        with SessionLocal() as session:
+            result = session.execute(delete(PricePoint).where(PricePoint.source.ilike("dummy%")))
+            session.commit()
+            return int(result.rowcount or 0)
+
+    @staticmethod
+    def clean_stale_dummy_prices(now: datetime | None = None) -> int:
+        """
+        Remove dummy prices that are not valid for the current time.
+        Rules:
+        - If allow_dummy_prices is disabled: delete all dummy prices.
+        - If allow_dummy_prices is enabled:
+            - dummy prices for `today` are kept (fallback for today if real prices failed).
+            - dummy prices for `tomorrow` are kept ONLY if now.hour >= 14.
+            - dummy prices for any other day (e.g., past, > tomorrow, or tomorrow before 14:00) are deleted.
+        """
+        from zoneinfo import ZoneInfo
+        if now is None:
+            now = datetime.now(ZoneInfo(settings.timezone))
+        today = now.date() if now.tzinfo is not None else now.date()
+        tomorrow = today + timedelta(days=1)
+        allow_dummy = bool(settings.allow_dummy_prices)
+        allow_tomorrow = allow_dummy and (now.hour >= 14)
+
+        with SessionLocal() as session:
+            dummy_points = list(
+                session.execute(
+                    select(PricePoint).where(PricePoint.source.ilike("dummy%"))
+                ).scalars()
+            )
+            deleted_count = 0
+            affected_days: set[str] = set()
+            for point in dummy_points:
+                point_ts = point.timestamp
+                if point_ts.tzinfo is not None:
+                    point_date = point_ts.astimezone(ZoneInfo(settings.timezone)).date()
+                else:
+                    point_date = point_ts.date()
+
+                keep = False
+                if point_date == today and allow_dummy:
+                    keep = True
+                elif point_date == tomorrow and allow_tomorrow:
+                    keep = True
+
+                if not keep:
+                    session.delete(point)
+                    deleted_count += 1
+                    affected_days.add(point_date.isoformat())
+
+            if deleted_count > 0:
+                session.commit()
+                # Clean up non-manual plan actions for days where dummy prices were purged
+                for day_key in affected_days:
+                    # Check if there are real prices left for this day
+                    day_val = date.fromisoformat(day_key)
+                    real_left = list(
+                        session.execute(
+                            select(PricePoint).where(
+                                PricePoint.timestamp >= datetime.combine(day_val, datetime.min.time()),
+                                PricePoint.timestamp < datetime.combine(day_val + timedelta(days=1), datetime.min.time()),
+                            )
+                        ).scalars()
+                    )
+                    if not real_left:
+                        session.execute(
+                            delete(PlanAction).where(
+                                PlanAction.date_key == day_key,
+                                PlanAction.is_manual_override.is_(False),
+                            )
+                        )
+                session.commit()
+            return deleted_count
+
+    @staticmethod
     def upsert_prices(points: list[PricePoint]) -> None:
         with SessionLocal() as session:
+            real_price_days = {
+                (point.timestamp.date(), point.area)
+                for point in points
+                if not point.source.lower().startswith("dummy")
+            }
+            for day, area in real_price_days:
+                day_start = datetime.combine(day, datetime.min.time())
+                day_end = day_start + timedelta(days=1)
+                session.execute(
+                    delete(PricePoint).where(
+                        PricePoint.timestamp >= day_start,
+                        PricePoint.timestamp < day_end,
+                        PricePoint.area == area,
+                        PricePoint.source.ilike("dummy%"),
+                    )
+                )
             for point in points:
                 existing = session.execute(
                     select(PricePoint).where(
