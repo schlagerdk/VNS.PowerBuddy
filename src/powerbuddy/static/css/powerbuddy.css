@@ -710,6 +710,16 @@
 			margin-top: 2px;
 		}
 
+		#pbNetMeta.is-backup-mode {
+			margin-top: 5px;
+			padding: 4px 7px;
+			border: 1px solid rgba(251, 146, 60, 0.72);
+			border-radius: 6px;
+			background: rgba(154, 52, 18, 0.42);
+			color: #ffedd5;
+			font-weight: 800;
+		}
+
 		.hero-energy-stat.solar .hero-energy-stat-value {
 			color: #ffc107;
 		}
@@ -742,6 +752,12 @@
 		}
 		.hero-energy-stat-ev-value {
 			white-space: nowrap;
+		}
+
+		.hero-energy-badge.backup {
+			background: rgba(249, 115, 22, 0.2);
+			border-color: rgba(251, 146, 60, 0.58);
+			color: #fed7aa;
 		}
 
 		.pb-ev-car-icon {

@@ -35,7 +35,12 @@ def get_detected_battery_capacity_kwh() -> float | None:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
     db_path: str = Field(default="./data/powerbuddy.db", alias="POWERBUDDY_DB_PATH")
     timezone: str = Field(default="Europe/Copenhagen", alias="POWERBUDDY_TIMEZONE")
@@ -654,38 +659,26 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_DASHBOARD_APPLE_TOUCH_ICON_URL",
     )
 
-    # Easee EV charger integration (optional).
-    easee_enabled: bool = Field(
+    # Fronius Wattpilot Flex Pro status integration (optional).
+    wattpilot_enabled: bool = Field(
         default=False,
-        alias="POWERBUDDY_EASEE_ENABLED",
+        alias="POWERBUDDY_WATTPILOT_ENABLED",
     )
-    easee_base_url: str = Field(
-        default="https://api.easee.com/api",
-        alias="POWERBUDDY_EASEE_BASE_URL",
-    )
-    easee_username: str = Field(
+    wattpilot_status_url: str = Field(
         default="",
-        alias="POWERBUDDY_EASEE_USERNAME",
+        alias="POWERBUDDY_WATTPILOT_STATUS_URL",
     )
-    easee_password: str = Field(
-        default="",
-        alias="POWERBUDDY_EASEE_PASSWORD",
-    )
-    easee_charger_id: str = Field(
-        default="",
-        alias="POWERBUDDY_EASEE_CHARGER_ID",
-    )
-    easee_timeout_seconds: int = Field(
+    wattpilot_timeout_seconds: int = Field(
         default=10,
-        alias="POWERBUDDY_EASEE_TIMEOUT_SECONDS",
+        alias="POWERBUDDY_WATTPILOT_TIMEOUT_SECONDS",
     )
-    easee_poll_interval_seconds: int = Field(
+    wattpilot_poll_interval_seconds: int = Field(
         default=20,
-        alias="POWERBUDDY_EASEE_POLL_INTERVAL_SECONDS",
+        alias="POWERBUDDY_WATTPILOT_POLL_INTERVAL_SECONDS",
     )
-    easee_state_max_age_seconds: int = Field(
+    wattpilot_state_max_age_seconds: int = Field(
         default=180,
-        alias="POWERBUDDY_EASEE_STATE_MAX_AGE_SECONDS",
+        alias="POWERBUDDY_WATTPILOT_STATE_MAX_AGE_SECONDS",
     )
 
     @staticmethod

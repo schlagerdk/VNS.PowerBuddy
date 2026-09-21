@@ -2246,13 +2246,13 @@
 				if (el) el.style.display = display;
 			}
 
-			function updateEvRealtime(data) {
-				const evAvailable = data && data.ev_available !== false;
-				const evCharging = asBool(data && data.ev_charging);
-				const evPowerRaw = Math.max(0, asNum(data && data.ev_power_w));
-				const evPowerW = (evPowerRaw > 0 && evPowerRaw < 50) ? (evPowerRaw * 1000) : evPowerRaw;
-				const shouldShow = evAvailable && (evCharging || evPowerW >= 150);
-				const shouldShowInline = evPowerW > 0;
+			function updateWattpilotRealtime(data) {
+				const chargerAvailable = data && data.charger_available === true;
+				const chargerCharging = asBool(data && data.charger_charging);
+				const chargerPowerRaw = Math.max(0, asNum(data && data.charger_power_w));
+				const chargerPowerW = (chargerPowerRaw > 0 && chargerPowerRaw < 50) ? (chargerPowerRaw * 1000) : chargerPowerRaw;
+				const shouldShow = chargerAvailable && (chargerCharging || chargerPowerW >= 150);
+				const shouldShowInline = chargerPowerW > 0;
 
 				if (!shouldShow) {
 					setDisplay('pbEvBadge', 'none');
@@ -2260,7 +2260,7 @@
 					return;
 				}
 
-				const kwText = `${(evPowerW / 1000).toFixed(1).replace('.', ',')} kW`;
+				const kwText = `${(chargerPowerW / 1000).toFixed(1).replace('.', ',')} kW`;
 
 				setText('pbEvBadgeValue', kwText);
 				setText('pbEvInlineValue', kwText);
@@ -2277,8 +2277,9 @@
 				const batteryCapacityKwh = resolveBatteryCapacityKwh(data);
 				const reserveMinSoc = resolveReserveMinSoc(data);
 
+				const isBackupMode = asBool(data && data.is_backup_mode);
 				const gridArrow = gridPowerW > 0 ? '↓' : (gridPowerW < 0 ? '↑' : '•');
-				const gridLabel = gridPowerW > 0 ? 'Køber' : (gridPowerW < 0 ? 'Sælger' : 'Standby');
+				const gridLabel = isBackupMode ? '⚠️ Backupdrift' : (gridPowerW > 0 ? 'Køber' : (gridPowerW < 0 ? 'Sælger' : 'Standby'));
 				const gridClass = gridPowerW > 0 ? 'net-import' : (gridPowerW < 0 ? 'net-export' : 'net-idle');
 
 				const batteryCharging = batteryPowerW < -10;
@@ -2306,11 +2307,14 @@
 					}
 				}
 
-				// Når grid er 0 kW kan vi hverken købe eller sælge – skjul pil og tekst
-				const gridNetDisplay = gridPowerW === 0 ? '–' : `${gridArrow} ${formatPower(Math.abs(gridPowerW))}`;
+				// When islanded, Fronius confirms backup mode and there is no grid value to show.
+				const gridNetDisplay = isBackupMode ? '' : (gridPowerW === 0 ? '–' : `${gridArrow} ${formatPower(Math.abs(gridPowerW))}`);
 
 				setText('pbNetValue', gridNetDisplay);
+				setText('pbNetIcon', isBackupMode ? '🏝️' : '🔌');
 				setText('pbNetMeta', gridLabel);
+				const netMeta = document.getElementById('pbNetMeta');
+				if (netMeta) netMeta.classList.toggle('is-backup-mode', isBackupMode);
 				setText('pbSolarValue', formatPower(Math.max(0, pvPowerW)));
 				setText('pbConsumptionValue', formatPower(Math.max(0, loadPowerW)));
 				renderBatteryPrimaryValue();
@@ -2323,7 +2327,7 @@
 				setClass(document.getElementById('pbNetBadge'), cls.net, gridClass);
 				setClass(document.getElementById('pbBatteryStat'), cls.battery, battClass);
 				setClass(document.getElementById('pbBatteryBadge'), cls.battery, battClass);
-				updateEvRealtime(data);
+				updateWattpilotRealtime(data);
 			}
 
 			bindBatteryToggle(document.getElementById('pbBatteryStat'));

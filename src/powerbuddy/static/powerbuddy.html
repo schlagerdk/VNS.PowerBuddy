@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260901a" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260921d" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -156,7 +156,7 @@
 									<span id="pbNetBadge" class="hero-energy-badge net net-export"><span class="badge-label">🔌 Net:</span> <span id="pbNetBadgeValue">&#x2191; 293 W</span></span>
 									<span class="hero-energy-badge solar"><span class="badge-label">☀️ Sol:</span> <span id="pbSolarBadgeValue">3,2 kW</span></span>
 									<span class="hero-energy-badge consumption"><span class="badge-label">⚡ Forbrug:</span> <span id="pbConsumptionBadgeValue">2,8 kW</span></span>
-									<span id="pbEvBadge" class="hero-energy-badge ev" style="display:none;"><span class="badge-label"><span class="pb-ev-car-icon" aria-hidden="true"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span><span>Bil:</span></span> <span id="pbEvBadgeValue">0,0 kW</span></span>
+									<span id="pbEvBadge" class="hero-energy-badge ev" style="display:none;"><span class="badge-label"><span class="pb-ev-car-icon" aria-hidden="true"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span><span>Wattpilot:</span></span> <span id="pbEvBadgeValue">0,0 kW</span></span>
 									<span id="pbBatteryBadge" class="hero-energy-badge battery battery-idle"><span class="badge-label"><span id="pbBatteryLinkMobile" class="pb-battery-emoji" aria-hidden="true">🔋</span><span>Batteri:</span></span> <span id="pbBatteryBadgeSoc">100%</span> <span id="pbBatteryBadgeFlow" class="flow-note">Standby</span></span>
 								</div>
 							</div>
@@ -164,7 +164,7 @@
 					</div>
 					<div class="hero-pane-energy">
 						<div id="pbNetStat" class="hero-energy-stat net net-export">
-							<div class="hero-energy-stat-icon">🔌</div>
+							<div id="pbNetIcon" class="hero-energy-stat-icon">🔌</div>
 							<div class="hero-energy-stat-label">Net</div>
 							<div id="pbNetValue" class="hero-energy-stat-value">&#x2191; 293 W</div>
 							<div id="pbNetMeta" class="hero-energy-stat-meta">S&#xE6;lger</div>
@@ -592,7 +592,7 @@
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260901a"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260921d"></script>
 </body>
 </html>
 

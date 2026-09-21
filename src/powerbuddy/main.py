@@ -48,9 +48,9 @@ from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.planning_sanity import apply_planning_sanity
 from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import get_price_provider
-from powerbuddy.services.easee import get_easee_status
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
+from powerbuddy.services.wattpilot import get_wattpilot_status
 from powerbuddy.services.weather import weather_forecast_service
 
 
@@ -773,7 +773,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.12",
+    version="1.0.13",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -923,7 +923,7 @@ async def dashboard(request: Request, secret: str | None = None) -> Response:
         payload["battery_capacity_kwh"] = float(settings.battery_capacity_kwh)
         payload["battery_min_soc"] = float(settings.battery_min_soc)
         payload["reserve_min_soc"] = float(settings.battery_min_soc)
-        payload.update(await get_easee_status())
+        payload.update(await get_wattpilot_status())
         return JSONResponse(jsonable_encoder(payload))
     if compat_action:
         return JSONResponse({"ok": False, "error": "unknown_action"}, status_code=400)
@@ -1238,7 +1238,7 @@ async def dashboard_state(request: Request) -> dict[str, object]:
         "ok": True,
         "authorized": _dashboard_is_authorized(request),
         "realtime": realtime.model_dump(),
-        "ev": await get_easee_status(),
+        "charger": await get_wattpilot_status(),
         "execution": execution,
         "plan_now": now_status.model_dump(),
         "current_action": current_action,
@@ -2266,6 +2266,7 @@ async def inverter_realtime() -> InverterRealtime:
         pv_power_w=data.pv_power_w,
         battery_power_w=data.battery_power_w,
         battery_soc=data.battery_soc,
+        is_backup_mode=data.is_backup_mode,
     )
 
 

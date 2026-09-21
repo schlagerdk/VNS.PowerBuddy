@@ -26,6 +26,7 @@ class InverterRealtime(BaseModel):
     pv_power_w: float
     battery_power_w: float
     battery_soc: float
+    is_backup_mode: bool
 
 
 class PlanActionOut(BaseModel):

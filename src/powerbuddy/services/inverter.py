@@ -27,6 +27,7 @@ class RealtimePowerData:
     pv_power_w: float
     battery_power_w: float
     battery_soc: float
+    is_backup_mode: bool
 
 
 class InverterClient:
@@ -77,6 +78,7 @@ class FroniusClient(InverterClient):
         load_power = abs(float(site.get("P_Load", 0.0) or 0.0))
         pv_power = max(0.0, float(site.get("P_PV", 0.0) or 0.0))
         battery_power = float(site.get("P_Akku", 0.0) or 0.0)
+        is_backup_mode = bool(site.get("BackupMode", False))
 
         return RealtimePowerData(
             timestamp=datetime.now(timezone.utc),
@@ -85,6 +87,7 @@ class FroniusClient(InverterClient):
             pv_power_w=pv_power,
             battery_power_w=battery_power,
             battery_soc=battery_soc,
+            is_backup_mode=is_backup_mode,
         )
 
     async def get_realtime(self) -> RealtimePowerData:

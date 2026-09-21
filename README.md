@@ -42,7 +42,7 @@ Core capabilities:
 - Supports manual plan overrides through the API.
 - Keeps existing day plans stable unless changed manually.
 - Includes a native FastAPI dashboard (`/dashboard`) for live overview, plan edits, and execution control.
-- Optional Easee EV charger integration with real-time charge state display.
+- Optional Fronius Wattpilot Flex Pro charge-state display.
 
 ## Compatibility
 
@@ -65,7 +65,7 @@ If you run a different hardware combination, validate in a test environment befo
 - `src/powerbuddy/main.py`: FastAPI application and endpoints.
 - `src/powerbuddy/services/scheduler.py`: Background jobs (price refresh, snapshots, execution).
 - `src/powerbuddy/dashboard_ui.py`: Dashboard HTML rendering and icon/asset injection.
-- `src/powerbuddy/services/easee.py`: Optional Easee EV charger integration (token auth, state polling, auto-discovery).
+- `src/powerbuddy/services/wattpilot.py`: Optional Wattpilot Flex Pro status polling.
 
 ## Quick Start
 
@@ -220,13 +220,12 @@ Notes:
 - The battery overview link on the dashboard is only clickable for logged-in dashboard sessions.
 - `.env.example` documents the main runtime knobs; omitted keys continue to use code defaults from `src/powerbuddy/config.py`.
 
-Easee EV charger integration (optional):
+Fronius Wattpilot Flex Pro integration (optional):
 
-- `POWERBUDDY_EASEE_ENABLED`: enable Easee integration (`true`/`false`).
-- `POWERBUDDY_EASEE_BASE_URL`: Easee API base URL (default: `https://api.easee.com/api`).
-- `POWERBUDDY_EASEE_USERNAME`: Easee account username.
-- `POWERBUDDY_EASEE_PASSWORD`: Easee account password.
-- `POWERBUDDY_EASEE_CHARGER_ID`: specific charger ID, or leave empty for auto-discovery.
+- `POWERBUDDY_WATTPILOT_ENABLED`: enable Wattpilot status polling (`true`/`false`).
+- `POWERBUDDY_WATTPILOT_STATUS_URL`: local Wattpilot endpoint that returns its current state.
+- `POWERBUDDY_WATTPILOT_TIMEOUT_SECONDS`: HTTP timeout for the Wattpilot status request.
+- `POWERBUDDY_WATTPILOT_POLL_INTERVAL_SECONDS`: minimum time between Wattpilot status requests.
 
 Scheduler behavior:
 
