@@ -290,6 +290,21 @@
 			line-height: 1.35;
 		}
 
+		@media (max-width: 900px) {
+			.pb-settings-actions {
+				grid-template-columns: 1fr;
+			}
+
+			.pb-settings-action {
+				flex-direction: row;
+				justify-content: flex-start;
+				min-height: 0;
+				padding: 12px 14px;
+				gap: 12px;
+				text-align: left;
+			}
+		}
+
 		.pb-language-flags {
 			display: flex;
 			gap: 8px;
