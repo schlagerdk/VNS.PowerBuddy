@@ -8,11 +8,13 @@ import hashlib
 import hmac
 import ipaddress
 import logging
+import os
 import re
+import shutil
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
@@ -25,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from powerbuddy.config import set_detected_battery_capacity_kwh, settings
 from powerbuddy.dashboard_ui import render_dashboard_html
 from powerbuddy.database import init_db
+from powerbuddy.i18n import normalize_language, t
 from powerbuddy.models import PlanAction, PricePoint
 from powerbuddy.repositories import AppSettingsRepository, KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.schemas import (
@@ -43,6 +46,7 @@ from powerbuddy.schemas import (
     TariffOut,
     TariffHourOut,
 )
+from powerbuddy.services import half_hour
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.planning_sanity import apply_planning_sanity
@@ -383,7 +387,7 @@ def _dashboard_apply_mode_state(html: str, pb_mode: str) -> str:
 
 
 def _dashboard_slot_key(dt: datetime) -> str:
-    return _naive_ts(dt).strftime("%Y-%m-%dT%H.%M.%S")
+    return _naive_ts(dt).replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H.%M.%S")
 
 
 def _dashboard_action_icon_svg(action_name: str) -> str:
@@ -399,13 +403,25 @@ def _dashboard_action_icon_svg(action_name: str) -> str:
 
 def _dashboard_action_label(action_name: str) -> str:
     action = (action_name or "").lower()
-    if action == "charge":
-        return "Charge"
-    if action == "discharge":
-        return "Discharge"
-    if action == "hold":
-        return "Hold"
-    return "Auto"
+    if action in ("charge", "discharge", "hold"):
+        return t(f"action.{action}")
+    return t("action.auto")
+
+
+def _decimal_text(value: str) -> str:
+    return value.replace(".", t("format.decimal"))
+
+
+def _dashboard_action_duration(action: PlanAction | PlanActionOut) -> str:
+    start = _naive_ts(action.start_time)
+    end = _naive_ts(action.end_time)
+    slot_start = start.replace(minute=0, second=0, microsecond=0)
+    slot_end = slot_start + timedelta(hours=1)
+    if start == slot_start and end == slot_start + timedelta(minutes=30):
+        return "first_half"
+    if start == slot_start + timedelta(minutes=30) and end == slot_end:
+        return "second_half"
+    return "full"
 
 
 def _dashboard_apply_plan_state(
@@ -413,10 +429,34 @@ def _dashboard_apply_plan_state(
     actions: list[PlanAction | PlanActionOut],
     prices: list[PriceOut],
 ) -> str:
-    action_map = {
-        _dashboard_slot_key(action.start_time): (str(action.action), str(action.id))
-        for action in actions
-    }
+    rows_by_hour: dict[str, list[PlanAction | PlanActionOut]] = {}
+    for action in actions:
+        rows_by_hour.setdefault(_dashboard_slot_key(action.start_time), []).append(action)
+    action_map: dict[str, dict[str, object]] = {}
+    for hour_key, hour_rows in rows_by_hour.items():
+        hour_slot = half_hour.hour_start(hour_rows[0].start_time)
+        first_rec, second_rec = half_hour.split_halves(cast(Any, hour_rows), hour_slot)
+        first_rec = first_rec or second_rec
+        second_rec = second_rec or first_rec
+        if first_rec is None or second_rec is None:
+            continue
+        id_row = next((row for row in hour_rows if row.is_manual_override), hour_rows[0])
+        first_action = str(first_rec.action or "auto").lower()
+        second_action = str(second_rec.action or "auto").lower()
+        if first_action == second_action and first_rec.manual == second_rec.manual:
+            duration_name = "full"
+        elif second_rec.manual and not first_rec.manual:
+            duration_name = "second_half"
+        else:
+            duration_name = "first_half"
+        action_map[hour_key] = {
+            "first": first_action,
+            "second": second_action,
+            "manual_first": first_rec.manual and first_action != "auto",
+            "manual_second": second_rec.manual and second_action != "auto",
+            "id": str(id_row.id),
+            "duration": duration_name,
+        }
     now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
     current_hour = now_local.replace(minute=0, second=0, microsecond=0)
     tomorrow_start = current_hour.replace(hour=0) + timedelta(days=1)
@@ -490,11 +530,17 @@ def _dashboard_apply_plan_state(
             is_dummy = "dummy" in source_name.lower()
             category = _price_category(price_ore, source_name)
             slot_key = slot.strftime("%Y-%m-%dT%H.%M.%S")
-            action_name, action_id = action_map.get(slot_key, ("", ""))
+            hour_info = action_map.get(slot_key)
+            action_name = str(hour_info["first"]) if hour_info else ""
+            second_action_name = str(hour_info["second"]) if hour_info else ""
+            action_id = str(hour_info["id"]) if hour_info else ""
+            action_duration = str(hour_info["duration"]) if hour_info else "full"
+            manual_first = bool(hour_info and hour_info["manual_first"])
+            manual_second = bool(hour_info and hour_info["manual_second"])
             action_label = _dashboard_action_label(action_name)
             action_icon = _dashboard_action_icon_svg(action_name)
             price_kr = price_ore / 100.0
-            price_text = f"{price_kr:.2f}".replace(".", ",")
+            price_text = _decimal_text(f"{price_kr:.2f}")
             hour_text = slot.strftime("%H")
             hour_label = slot.strftime("%H.%M")
             day_is_today = slot < tomorrow_start
@@ -505,7 +551,7 @@ def _dashboard_apply_plan_state(
             boundary_badge = ""
             if is_day_boundary:
                 if slot >= tomorrow_start:
-                    boundary_text = "I MORGEN"
+                    boundary_text = t("chart.tomorrow")
                 else:
                     boundary_text = slot.strftime("%d/%m")
                 boundary_badge = f'\n\t\t\t\t\t\t\t\t\t\t<span class="day-boundary-badge">{boundary_text}</span>'
@@ -519,31 +565,50 @@ def _dashboard_apply_plan_state(
 
             flag_html = ""
             if not is_dummy and slot == cheapest_slot:
-                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag low">Billigste</span>'
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag low">' + t("chart.cheapest") + '</span>'
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag-line low"></span>'
             if not is_dummy and slot == priciest_slot:
-                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag peak">Dyreste</span>'
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag peak">' + t("chart.priciest") + '</span>'
+                flag_html += '\n\t\t\t\t\t\t\t\t\t\t<span class="bar-flag-line peak"></span>'
 
             action_icon_html = ""
             editable_class = ""
             if action_name:
                 editable_class = "is-action-editable"
-                action_icon_html = "\n".join(
-                    [
-                        f'\t\t\t\t\t\t\t\t<span class="bar-action-icon {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">',
-                        f"\t\t\t\t\t\t\t\t\t{action_icon}",
-                        "\t\t\t\t\t\t\t\t</span>",
-                    ]
-                )
+                if second_action_name and second_action_name != action_name:
+                    second_label = _dashboard_action_label(second_action_name)
+                    action_icon_html = "\n".join(
+                        [
+                            '\t\t\t\t\t\t\t\t<span class="bar-action-icons">',
+                            f'\t\t\t\t\t\t\t\t\t<span class="bar-action-icon half-first {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">{action_icon}</span>',
+                            f'\t\t\t\t\t\t\t\t\t<span class="bar-action-icon half-second {second_action_name}" title="PowerBuddy: {second_label}" aria-hidden="true">{_dashboard_action_icon_svg(second_action_name)}</span>',
+                            "\t\t\t\t\t\t\t\t</span>",
+                        ]
+                    )
+                else:
+                    action_icon_html = "\n".join(
+                        [
+                            f'\t\t\t\t\t\t\t\t<span class="bar-action-icon {action_name}" title="PowerBuddy: {action_label}" aria-hidden="true">',
+                            f"\t\t\t\t\t\t\t\t\t{action_icon}",
+                            "\t\t\t\t\t\t\t\t</span>",
+                        ]
+                    )
 
             wrapper_classes = f"bar-wrapper {day_class} {boundary_class} {editable_class} {'is-dummy' if is_dummy else ''}".strip()
+            if manual_first or manual_second:
+                wrapper_classes += " is-manual-action"
+            if manual_first:
+                wrapper_classes += " manual-first"
+            if manual_second:
+                wrapper_classes += " manual-second"
             price_value_html = "" if is_dummy else f'\t\t\t\t\t\t\t\t\t<span class="bar-value">{price_text}</span>'
             bars.append(
                 "\n".join(
                     [
-                        f'\t\t\t\t\t\t\t<div class="{wrapper_classes}" data-day="{day_class}" data-index="{idx}" data-category="{category}" data-price="{price_ore:.4f}" data-action="{action_name}" data-action-id="{action_id}" data-start-time="{slot_key}" data-hour-label="{hour_label}" data-source="{source_name}">',
+                        f'\t\t\t\t\t\t\t<div class="{wrapper_classes} action-duration-{action_duration}" data-day="{day_class}" data-index="{idx}" data-category="{category}" data-price="{price_ore:.4f}" data-action="{action_name}" data-action-first="{action_name}" data-action-second="{second_action_name or action_name}" data-action-duration="{action_duration}" data-action-id="{action_id}" data-start-time="{slot_key}" data-hour-label="{hour_label}" data-source="{source_name}">',
                         f"{boundary_badge}" if boundary_badge else "",
-                        f'\t\t\t\t\t\t\t\t<div class="bar {category}" style="height: {height_percent:.1f}%;" aria-label="{hour_label} - {price_text} kr">',
                         f"{flag_html}" if flag_html else "",
+                        f'\t\t\t\t\t\t\t\t<div class="bar {category}" style="height: {height_percent:.1f}%;" aria-label="{hour_label} - {price_text} kr">',
                         price_value_html,
                         "\t\t\t\t\t\t\t\t</div>",
                         f"{action_icon_html}" if action_icon_html else "",
@@ -584,7 +649,7 @@ def _dashboard_apply_plan_state(
             current_price_kr = fallback_meta[1]
 
     if current_price_kr is not None:
-        current_price_text = f"{current_price_kr:.2f}".replace(".", ",")
+        current_price_text = _decimal_text(f"{current_price_kr:.2f}")
         html = re.sub(
             r'(<div class="hero-price">)[^<]*(</div>)',
             rf'\g<1>{current_price_text} kr\g<2>',
@@ -599,17 +664,17 @@ def _dashboard_apply_plan_state(
         )
 
     alert_by_category = {
-        "low": ("alert-success", "Lav pris - god tid at bruge strøm"),
-        "medium": ("alert-info", "Fornuftig pris - helt ok"),
-        "high": ("alert-warning", "Høj pris - spar hvis muligt"),
-        "peak": ("alert-danger", "Meget høj pris - vent hvis muligt"),
+        "low": ("alert-success", t("alert.low")),
+        "medium": ("alert-info", t("alert.medium")),
+        "high": ("alert-warning", t("alert.high")),
+        "peak": ("alert-danger", t("alert.peak")),
     }
     alert_class, alert_text = alert_by_category.get(current_category, alert_by_category["medium"])
     alert_icon_by_category = {
-        "low": ("check-circle-fill", "Success:"),
-        "medium": ("info-fill", "Info:"),
-        "high": ("exclamation-triangle-fill", "Warning:"),
-        "peak": ("stop-fill", "Danger:"),
+        "low": ("check-circle-fill", t("alert.label.low")),
+        "medium": ("info-fill", t("alert.label.medium")),
+        "high": ("exclamation-triangle-fill", t("alert.label.high")),
+        "peak": ("stop-fill", t("alert.label.peak")),
     }
     alert_icon_id, alert_icon_label = alert_icon_by_category.get(current_category, alert_icon_by_category["medium"])
 
@@ -773,7 +838,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.13",
+    version="1.0.14",
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -950,10 +1015,17 @@ async def dashboard(request: Request, secret: str | None = None) -> Response:
         apple_touch_icon_url=apple_touch_icon_url,
     )
     today = datetime.now(ZoneInfo(settings.timezone)).date()
-    actions_today = await get_plan(target_date=today)
-    actions_tomorrow = await get_plan(target_date=today + timedelta(days=1))
+    # The dashboard needs every row (both half hours); get_plan() dedupes to one per hour.
+    dashboard_rows: list[PlanAction] = []
+    for plan_day in (today, today + timedelta(days=1)):
+        await _materialize_day_plan_if_missing(plan_day)
+        dashboard_rows.extend(
+            row
+            for row in PlanRepository.get_plan(plan_day.isoformat())
+            if _naive_ts(row.start_time).date() == plan_day
+        )
     prices = await get_prices()
-    html = _dashboard_apply_plan_state(html, [*actions_today, *actions_tomorrow], prices)
+    html = _dashboard_apply_plan_state(html, dashboard_rows, prices)
     html = _dashboard_apply_mode_state(html, request.query_params.get("pbMode", ""))
     html = _dashboard_apply_runtime_state(html)
     html = _dashboard_apply_auth_state(html, authorized=is_authorized, request=request)
@@ -1084,10 +1156,22 @@ async def dashboard_compat_action(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
 
         plan_action = cast(Literal["auto", "charge", "discharge", "hold", "discharge_force"], next_action)
+        duration = str(payload.get("actionDuration") or "full").strip().lower()
+        if duration not in {"full", "first_half", "second_half"}:
+            return JSONResponse({"ok": False, "error": "invalid_duration"}, status_code=400)
+        other_raw = str(payload.get("otherAction") or "").strip().lower()
+        if other_raw and other_raw not in {"auto", "charge", "hold", "discharge"}:
+            return JSONResponse({"ok": False, "error": "invalid_action"}, status_code=400)
+        other_action = cast(Literal["auto", "charge", "discharge", "hold"] | None, other_raw or None)
         try:
             updated = await update_plan_action(
                 action_id,
-                PlanActionUpdateIn(action=plan_action, reason="manual override (dashboard compat)"),
+                PlanActionUpdateIn(
+                    action=plan_action,
+                    duration=cast(Literal["full", "first_half", "second_half"], duration),
+                    other_action=other_action,
+                    reason="manual override (dashboard compat)",
+                ),
             )
         except HTTPException as exc:
             if exc.status_code == 404:
@@ -1096,7 +1180,12 @@ async def dashboard_compat_action(request: Request) -> JSONResponse:
                     return JSONResponse({"ok": False, "error": "action_not_found"}, status_code=404)
                 updated = await update_plan_action(
                     fallback_id,
-                    PlanActionUpdateIn(action=plan_action, reason="manual override (dashboard compat)"),
+                    PlanActionUpdateIn(
+                        action=plan_action,
+                        duration=cast(Literal["full", "first_half", "second_half"], duration),
+                        other_action=other_action,
+                        reason="manual override (dashboard compat)",
+                    ),
                 )
             else:
                 detail = exc.detail if isinstance(exc.detail, str) else "update_failed"
@@ -1263,6 +1352,33 @@ async def dashboard_control(request: Request) -> dict[str, object]:
     return result
 
 
+_UI_LANGUAGE_CODES = ("DK", "EN", "DE")
+
+
+def _language_env_code(value: str | None) -> str:
+    return {"da": "DK", "en": "EN", "de": "DE"}.get(normalize_language(value), "DK")
+
+
+def _persist_env_value(key: str, value: str) -> None:
+    """Set KEY=value in the .env file, replacing an existing line or appending one."""
+    env_path = Path(str(settings.model_config.get("env_file") or ".env")).resolve()
+    raw = env_path.read_bytes().decode("utf-8") if env_path.exists() else ""
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    lines = raw.splitlines()
+    replaced = False
+    for idx, line in enumerate(lines):
+        if re.match(rf"^\s*{re.escape(key)}\s*=", line):
+            lines[idx] = f"{key}={value}"
+            replaced = True
+    if not replaced:
+        lines.append(f"{key}={value}")
+    tmp_path = env_path.with_name(env_path.name + ".tmp")
+    tmp_path.write_bytes((newline.join(lines) + newline).encode("utf-8"))
+    if env_path.exists():
+        shutil.copymode(env_path, tmp_path)
+    os.replace(tmp_path, env_path)
+
+
 @app.post("/dashboard/settings/action", tags=["system"], summary="Run a manual dashboard maintenance action")
 @app.post("/powerbuddy/settings/action", tags=["system"], summary="Run a manual dashboard maintenance action via proxy")
 async def dashboard_settings_action(request: Request) -> dict[str, object]:
@@ -1271,6 +1387,20 @@ async def dashboard_settings_action(request: Request) -> dict[str, object]:
 
     payload = await request.json()
     action = str(payload.get("action") or "").strip().lower()
+    if action == "language-status":
+        return {"ok": True, "action": action, "language": _language_env_code(settings.ui_language)}
+    if action == "set-language":
+        code = str(payload.get("language") or "").strip().upper()
+        if code not in _UI_LANGUAGE_CODES:
+            raise HTTPException(status_code=400, detail="Invalid language")
+        try:
+            _persist_env_value("POWERBUDDY_UI_LANGUAGE", code)
+        except OSError as exc:
+            logger.warning("Could not write POWERBUDDY_UI_LANGUAGE to .env: %s", exc)
+            raise HTTPException(status_code=500, detail="env_write_failed") from exc
+        settings.ui_language = code
+        logger.info("UI language changed to %s from dashboard settings", code)
+        return {"ok": True, "action": action, "language": code}
     if action == "dummy-prices-status":
         return {"ok": True, "action": action, "enabled": settings.allow_dummy_prices}
     if action == "set-dummy-prices":
@@ -1314,7 +1444,14 @@ async def dashboard_update_plan_action(action_id: int, request: Request) -> Plan
         raise HTTPException(status_code=400, detail="Invalid action")
 
     validated_action = cast(Literal["auto", "charge", "discharge", "hold", "discharge_force"], action)
-    update_payload = PlanActionUpdateIn(action=validated_action, reason="manual override (dashboard)")
+    duration = str(payload.get("duration") or "full").strip().lower()
+    if duration not in {"full", "first_half", "second_half"}:
+        raise HTTPException(status_code=400, detail="Invalid duration")
+    update_payload = PlanActionUpdateIn(
+        action=validated_action,
+        duration=cast(Literal["full", "first_half", "second_half"], duration),
+        reason="manual override (dashboard)",
+    )
     return await update_plan_action(action_id, update_payload)
 
 
@@ -2464,17 +2601,43 @@ async def update_plan_action(action_id: int, payload: PlanActionUpdateIn) -> Pla
 
     updates = payload.model_dump(exclude_unset=True)
     effective_action = str(updates.get("action", existing.action))
-    updates["charge_power_w"] = _resolve_default_charge_power_w(
-        effective_action,
-        updates.get("charge_power_w", existing.charge_power_w),
+    duration = str(updates.pop("duration", "full"))
+    if duration not in {"full", "first_half", "second_half"}:
+        raise HTTPException(status_code=400, detail="Invalid duration")
+    other_action = updates.pop("other_action", None)
+    slot_start = half_hour.hour_start(existing.start_time)
+    day_rows = [
+        row
+        for row in PlanRepository.get_plan(existing.date_key)
+        if half_hour.hour_start(row.start_time) == slot_start
+    ]
+    new_record = half_hour.HalfRecord(
+        action=effective_action,
+        charge_power_w=_resolve_default_charge_power_w(
+            effective_action,
+            updates.get("charge_power_w", existing.charge_power_w),
+        ),
+        target_soc=updates.get("target_soc", existing.target_soc),
+        reason=updates.get("reason") or "manual override",
+        manual=True,
     )
-    # Any direct action edit is considered a manual override and must survive auto re-plans.
-    updates["is_manual_override"] = True
-    if not updates.get("reason"):
-        updates["reason"] = "manual override"
-    updated = PlanRepository.update_action(action_id, **updates)
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Plan action not found")
+    halves = half_hour.apply_edit(half_hour.split_halves(day_rows, slot_start), duration, new_record)
+    if duration != "full" and other_action:
+        other_index = 1 if duration == "first_half" else 0
+        other_current = halves[other_index]
+        if other_current is None or other_current.action != other_action:
+            halves[other_index] = half_hour.HalfRecord(
+                action=str(other_action),
+                charge_power_w=_resolve_default_charge_power_w(str(other_action), None),
+                target_soc=None,
+                reason="manual override",
+                manual=True,
+            )
+    rebuilt = PlanRepository.rebuild_hour(
+        existing.date_key, slot_start, half_hour.build_rows(existing.date_key, slot_start, halves)
+    )
+    edited_index = 1 if duration == "second_half" and len(rebuilt) > 1 else 0
+    updated = rebuilt[edited_index] if rebuilt else None
     try:
         updated_day = date.fromisoformat(updated.date_key)
     except Exception:

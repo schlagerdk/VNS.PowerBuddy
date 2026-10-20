@@ -112,6 +112,62 @@ def test_should_fetch_day_timing():
     assert scheduler._should_fetch_day(day_after, now_after_13, []) is False
 
 
+def test_full_battery_conversion_preserves_manual_charge_override(monkeypatch):
+    now = datetime(2026, 9, 1, 14, 30)
+    manual_charge = PlanAction(
+        id=1,
+        date_key="2026-09-01",
+        start_time=datetime(2026, 9, 1, 14),
+        end_time=datetime(2026, 9, 1, 15),
+        action="charge",
+        target_soc=90.0,
+        reason="manual override",
+        is_manual_override=True,
+    )
+    generated_charge = PlanAction(
+        id=2,
+        date_key="2026-09-01",
+        start_time=datetime(2026, 9, 1, 15),
+        end_time=datetime(2026, 9, 1, 16),
+        action="charge",
+        target_soc=90.0,
+        reason="price optimization",
+        is_manual_override=False,
+    )
+    actions = [manual_charge, generated_charge]
+    updates = []
+
+    monkeypatch.setattr(
+        "powerbuddy.services.scheduler.PlanRepository.get_plan",
+        lambda day_key: actions,
+    )
+
+    def update_action(action_id, **kwargs):
+        updates.append((action_id, kwargs))
+        return generated_charge
+
+    monkeypatch.setattr(
+        "powerbuddy.services.scheduler.PlanRepository.update_action",
+        update_action,
+    )
+
+    scheduler = object.__new__(PowerBuddyScheduler)
+    converted = scheduler._convert_active_charge_block_to_hold("2026-09-01", now)
+
+    assert converted == 1
+    assert updates == [
+        (
+            2,
+            {
+                "action": "hold",
+                "charge_power_w": None,
+                "target_soc": None,
+                "reason": "battery full: converted charge block to hold",
+            },
+        )
+    ]
+
+
 def test_clean_stale_dummy_prices_removes_morning_dummy_for_tomorrow(monkeypatch):
     engine = sqlalchemy.create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

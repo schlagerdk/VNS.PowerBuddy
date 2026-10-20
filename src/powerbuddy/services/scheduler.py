@@ -11,6 +11,7 @@ from powerbuddy.config import settings
 from powerbuddy.database import SessionLocal
 from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot
 from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
+from powerbuddy.services.half_hour import planned_remainders as half_hour_remainders
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.planning_sanity import apply_planning_sanity
@@ -216,6 +217,7 @@ class PowerBuddyScheduler:
                 pv_weather_factor_24h=weather_factors,
             )
         )
+        planned_before_manual = list(actions_future)
         if manual_overrides:
             actions_future = [
                 action
@@ -269,6 +271,7 @@ class PowerBuddyScheduler:
             tariff_ore_per_hour=tariff_24h,
         )
         actions = [a for a in trimmed_effective_actions if not a.is_manual_override]
+        actions += half_hour_remainders(planned_before_manual, manual_overrides)
         PlanRepository.replace_plan(day_key, actions)
         actions_for_simulation = PlanRepository.get_plan(day_key)
         actions_for_simulation = self._dedupe_effective_actions(actions_for_simulation)
@@ -342,7 +345,7 @@ class PowerBuddyScheduler:
                 break
 
             for action in slot_actions:
-                if action.action != "charge":
+                if action.action != "charge" or action.is_manual_override:
                     continue
                 updated = PlanRepository.update_action(
                     action.id,
@@ -1193,4 +1196,3 @@ class PowerBuddyScheduler:
 
     def shutdown(self) -> None:
         self.scheduler.shutdown(wait=False)
-

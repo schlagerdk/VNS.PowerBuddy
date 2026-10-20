@@ -1,3 +1,38 @@
+		function pbT(key, params) {
+			const catalog = window.PB_I18N || {};
+			let text = Object.prototype.hasOwnProperty.call(catalog, key) ? catalog[key] : key;
+			if (params) {
+				Object.keys(params).forEach((name) => {
+					text = text.split('{' + name + '}').join(String(params[name]));
+				});
+			}
+			return text;
+		}
+
+		function pbDecimal(value) {
+			return String(value).replace('.', pbT('format.decimal'));
+		}
+
+		(function () {
+			// Stretch each flag's dashed line from the flag down to the top of its bar.
+			const wrappers = Array.from(document.querySelectorAll('.bar-wrapper')).filter((w) => w.querySelector('.bar-flag-line'));
+			if (!wrappers.length) return;
+			const update = () => {
+				wrappers.forEach((wrapper) => {
+					const bar = wrapper.querySelector('.bar');
+					const line = wrapper.querySelector('.bar-flag-line');
+					if (!bar || !line || !bar.offsetParent) return;
+					line.style.height = `${Math.max(0, bar.offsetTop + 50)}px`;
+				});
+			};
+			update();
+			window.addEventListener('resize', update);
+			if (window.ResizeObserver) {
+				const observer = new ResizeObserver(update);
+				wrappers.forEach((wrapper) => observer.observe(wrapper));
+			}
+		})();
+
 		(function () {
 			const ua = navigator.userAgent || '';
 			if (ua.indexOf('Electron') >= 0) {
@@ -138,13 +173,14 @@
 			}
 
 			if (buttons[0]) {
-				const shortLabel = availableBars <= shortRange ? `${availableBars}t` : `${shortRange}t`;
+				const hoursSuffix = pbT('chart.hoursSuffix');
+				const shortLabel = availableBars <= shortRange ? `${availableBars}${hoursSuffix}` : `${shortRange}${hoursSuffix}`;
 				buttons[0].textContent = shortLabel;
 				buttons[0].setAttribute("data-range", String(Math.min(shortRange, availableBars)));
 			}
 
 			if (buttons[1]) {
-				buttons[1].textContent = 'I dag+I morgen';
+				buttons[1].textContent = pbT('chart.rangeLong');
 				buttons[1].setAttribute("data-range", String(longRange));
 			}
 
@@ -359,13 +395,19 @@
 			const loginForm = document.getElementById('pbActionLoginForm');
 			const loginPassword = document.getElementById('pbActionLoginPassword');
 			const loginSubmit = document.getElementById('pbActionLoginSubmit');
-			const choiceButtons = Array.from(modal.querySelectorAll('.pb-action-choice'));
+			const choiceButtons = Array.from(modal.querySelectorAll('#pbActionChoices .pb-action-choice'));
+			const otherChoiceButtons = Array.from(modal.querySelectorAll('#pbActionOtherChoices .pb-action-choice'));
+			const otherSection = document.getElementById('pbActionOtherSection');
+			const primaryLabel = document.getElementById('pbActionPrimaryLabel');
+			const otherLabel = document.getElementById('pbActionOtherLabel');
+			const durationButtons = Array.from(modal.querySelectorAll('.pb-action-duration'));
+			const saveActionButton = document.getElementById('pbActionSave');
 			const actionRiskConfirm = document.getElementById('pbActionRiskConfirm');
 			const actionRiskTitle = document.getElementById('pbActionRiskTitle');
 			const actionRiskText = document.getElementById('pbActionRiskText');
 			const actionRiskCancel = document.getElementById('pbActionRiskCancel');
 			const actionRiskContinue = document.getElementById('pbActionRiskContinue');
-			const actionChoices = modal.querySelector('.pb-action-choices');
+			const actionChoices = modal.querySelector('#pbActionChoices');
 			const actionTargets = Array.from(document.querySelectorAll('.bar-wrapper.is-action-editable'));
 			const chart = document.getElementById('priceChart');
 			const chartRunToggle = document.getElementById('pbChartRunToggle');
@@ -383,6 +425,13 @@
 
 			let activeAction = 'auto';
 			let currentAction = 'auto';
+			let activeDuration = 'full';
+			let currentDuration = 'full';
+			let activeOther = 'auto';
+			let currentOther = '';
+			let barFirstAction = 'auto';
+			let barSecondAction = 'auto';
+			let activeSlotLabel = '';
 			let activeActionId = '';
 			let activeStartTime = '';
 			let activeCategory = '';
@@ -434,13 +483,21 @@
 				}
 			}
 
+			function dashboardSlotKey(dateValue) {
+				const year = dateValue.getFullYear();
+				const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+				const day = String(dateValue.getDate()).padStart(2, '0');
+				const hour = String(dateValue.getHours()).padStart(2, '0');
+				return `${year}-${month}-${day}T${hour}.00.00`;
+			}
+
 			const heroRibbon = document.querySelector('.hero-action-ribbon');
 
 			if (isPowerBuddyPaused && heroRibbon) {
 				heroRibbon.classList.remove('charge', 'discharge', 'hold', 'auto');
 				heroRibbon.classList.add('auto');
 				const span = heroRibbon.querySelector('span');
-				if (span) span.textContent = 'Auto';
+				if (span) span.textContent = pbT('action.auto');
 			}
 
 			function setHeroRibbon(actionName, label) {
@@ -460,7 +517,7 @@
 				chart.setAttribute('data-is-paused', isPowerBuddyPaused ? '1' : '0');
 
 				if (isPowerBuddyPaused) {
-					setHeroRibbon('auto', 'Auto');
+					setHeroRibbon('auto', pbT('action.auto'));
 				} else if (heroRibbon) {
 					const origAction = heroRibbon.getAttribute('data-action') || '';
 					const origLabel = heroRibbon.getAttribute('data-action-label') || origAction;
@@ -476,16 +533,16 @@
 						chartRunToggle.style.visibility = 'hidden';
 						chartRunToggle.style.pointerEvents = 'none';
 						chartRunToggle.setAttribute('data-command', 'start');
-						chartRunToggle.setAttribute('title', 'Start PowerBuddy');
-						chartRunToggle.setAttribute('aria-label', 'Start PowerBuddy');
-						chartRunToggle.innerHTML = '<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M5 3.5L12 8L5 12.5V3.5Z"></path></svg></span><span>Start</span>';
+						chartRunToggle.setAttribute('title', pbT('chart.start'));
+						chartRunToggle.setAttribute('aria-label', pbT('chart.start'));
+						chartRunToggle.innerHTML = '<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M5 3.5L12 8L5 12.5V3.5Z"></path></svg></span><span>' + pbT('chart.startShort') + '</span>';
 					} else {
 						chartRunToggle.style.visibility = '';
 						chartRunToggle.style.pointerEvents = '';
 						chartRunToggle.setAttribute('data-command', 'pause');
-						chartRunToggle.setAttribute('title', 'Pause PowerBuddy');
-						chartRunToggle.setAttribute('aria-label', 'Pause PowerBuddy');
-						chartRunToggle.innerHTML = '<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg></span><span>Pause</span>';
+						chartRunToggle.setAttribute('title', pbT('chart.pauseTitle'));
+						chartRunToggle.setAttribute('aria-label', pbT('chart.pauseTitle'));
+						chartRunToggle.innerHTML = '<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg></span><span>' + pbT('chart.pause') + '</span>';
 					}
 				}
 			}
@@ -508,40 +565,23 @@
 			}
 
 			function currentControlActionLabel() {
-				switch (currentControlAction) {
-					case 'charge':
-						return 'Charge';
-					case 'discharge':
-						return 'Discharge';
-					case 'hold':
-						return 'Hold';
-					default:
-						return 'Auto';
-				}
+				return pbT(['charge', 'discharge', 'hold'].includes(currentControlAction) ? `action.${currentControlAction}` : 'action.auto');
 			}
 
-			function currentControlCategoryLabel() {
-				switch (currentControlCategory) {
-					case 'low':
-						return 'lav';
-					case 'medium':
-						return 'fornuftig';
-					case 'high':
-						return 'høj';
-					case 'peak':
-						return 'meget høj';
-					default:
-						return '';
+			function currentControlCategoryLabel(inline) {
+				if (!['low', 'medium', 'high', 'peak'].includes(currentControlCategory)) {
+					return '';
 				}
+				return pbT(`category.${currentControlCategory}${inline ? '.inline' : ''}`);
 			}
 
 			function currentControlCategoryBadgeLabel() {
 				const label = currentControlCategoryLabel();
 				if (!label) {
-					return 'Aktuel time';
+					return pbT('control.currentHour');
 				}
 
-				return `Pris: ${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+				return pbT('price.badge', { label: `${label.charAt(0).toUpperCase()}${label.slice(1)}` });
 			}
 
 			function closeControlConfirmModal() {
@@ -557,47 +597,35 @@
 			}
 
 			function pauseConfirmContent() {
-				const categoryLabel = currentControlCategoryLabel();
-				const priceLabel = Number.isFinite(currentControlPrice) ? formatPriceKr(currentControlPrice) : '';
+				const category = currentControlCategoryLabel(true);
+				const priceValue = Number.isFinite(currentControlPrice) ? formatPriceKr(currentControlPrice) : '';
+				const priceTo = priceValue ? pbT('control.suffixTo', { price: priceValue }) : '';
+				const priceAt = priceValue ? pbT('control.suffixAt', { price: priceValue }) : '';
+				const favorable = currentControlCategory === 'low' || currentControlCategory === 'medium';
+				let key = '';
 
-				if ((currentControlCategory === 'low' || currentControlCategory === 'medium') && currentControlAction === 'charge') {
-					return {
-						title: 'Bekræft pause under opladning',
-						text: `PowerBuddy lader lige nu i en ${categoryLabel} time${priceLabel ? ` til ${priceLabel}` : ''}. Pause stopper opladningen i den aktuelle time.`
-					};
+				if (favorable && currentControlAction === 'charge') {
+					key = 'control.pauseCharge';
+				} else if (favorable && currentControlAction === 'hold') {
+					key = 'control.pauseHoldGood';
+				} else if (currentControlCategory === 'high' && currentControlAction === 'hold') {
+					key = 'control.pauseHoldHigh';
+				} else if (currentControlCategory === 'high' && currentControlAction === 'discharge') {
+					key = 'control.pauseDischargeHigh';
+				} else if (currentControlCategory === 'peak' && currentControlAction === 'discharge') {
+					key = 'control.pauseDischargePeak';
 				}
 
-				if ((currentControlCategory === 'low' || currentControlCategory === 'medium') && currentControlAction === 'hold') {
+				if (!key) {
 					return {
-						title: 'Bekræft pause i gunstig time',
-						text: `PowerBuddy holder lige nu batteriet i ro i en ${categoryLabel} time${priceLabel ? ` til ${priceLabel}` : ''}. Pause slår den aktive styring fra i den aktuelle time.`
-					};
-				}
-
-				if (currentControlCategory === 'high' && currentControlAction === 'hold') {
-					return {
-						title: 'Bekræft pause ved høj pris',
-						text: `PowerBuddy beskytter lige nu batteriet i en høj time${priceLabel ? ` til ${priceLabel}` : ''}. Pause fjerner den aktive styring i den aktuelle time.`
-					};
-				}
-
-				if (currentControlCategory === 'high' && currentControlAction === 'discharge') {
-					return {
-						title: 'Bekræft pause under afladning',
-						text: `PowerBuddy aflader lige nu i en høj time${priceLabel ? ` til ${priceLabel}` : ''}. Pause stopper afladningen i den aktuelle time.`
-					};
-				}
-
-				if (currentControlCategory === 'peak' && currentControlAction === 'discharge') {
-					return {
-						title: 'Bekræft pause i meget dyr time',
-						text: `PowerBuddy aflader lige nu i en meget høj time${priceLabel ? ` til ${priceLabel}` : ''}. Pause stopper afladningen i den aktuelle time.`
+						title: pbT('control.confirmPause'),
+						text: pbT('control.pauseGeneric.text', { price: priceAt })
 					};
 				}
 
 				return {
-					title: 'Bekræft pause',
-					text: `Er du sikker på, at du vil pause PowerBuddy nu${priceLabel ? ` ved ${priceLabel}` : ''}?`
+					title: pbT(`${key}.title`),
+					text: pbT(`${key}.text`, { category, price: priceTo })
 				};
 			}
 
@@ -632,7 +660,7 @@
 					controlConfirmPrice.textContent = '';
 				}
 
-				controlConfirmContinue.textContent = 'Ja, pause PowerBuddy';
+				controlConfirmContinue.textContent = pbT('control.yesPause');
 				controlConfirmModal.classList.add('open');
 				controlConfirmModal.setAttribute('aria-hidden', 'false');
 				updateBodyScrollLock();
@@ -705,7 +733,7 @@
 					: (isPowerBuddyPaused ? 'hold' : 'auto');
 				hideActionRiskConfirm();
 				if (slot) {
-					slot.textContent = 'PowerBuddy styring';
+					slot.textContent = pbT('control.title');
 				}
 				setSlotCategory('');
 				setCurrentActionChip(loginModalAction);
@@ -718,7 +746,7 @@
 				modal.classList.add('open');
 				modal.setAttribute('aria-hidden', 'false');
 				updateBodyScrollLock();
-				setStatus(command === 'pause' ? 'Log ind for at pause PowerBuddy.' : 'Log ind for at starte PowerBuddy.', false);
+				setStatus(pbT(command === 'pause' ? 'control.loginPause' : 'control.loginStart'), false);
 				if (loginPassword) {
 					window.setTimeout(() => {
 						loginPassword.focus();
@@ -766,9 +794,9 @@
 					const errCode = data && (data.error || data.message || data.statusCode)
 						? String(data.error || data.message || data.statusCode)
 						: 'control_failed';
-					setStatus(`Kunne ikke skifte PowerBuddy status (${errCode})${attempted}.`, true);
+					setStatus(pbT('control.switchFailed', { code: errCode, attempted }), true);
 				} catch (_) {
-					setStatus('Kunne ikke skifte PowerBuddy status.', true);
+					setStatus(pbT('control.switchFailedShort'), true);
 				} finally {
 					isControlBusy = false;
 					setControlButtonsDisabled(false);
@@ -855,16 +883,16 @@
 
 			function formatPriceKr(priceValue) {
 				if (typeof priceValue !== 'number' || Number.isNaN(priceValue)) {
-					return 'ukendt pris';
+					return pbT('price.unknown');
 				}
 
-				return `${priceValue.toFixed(2).replace('.', ',')} kr/kWh`;
+				return `${pbDecimal(priceValue.toFixed(2))} kr/kWh`;
 			}
 
 			async function confirmRiskAction(options) {
-				const title = options && options.title ? options.title : 'Bekræft handling';
-				const text = options && options.text ? options.text : 'Er du sikker på, at du vil fortsætte med denne handling?';
-				const continueLabel = options && options.continueLabel ? options.continueLabel : 'Ja, bekræft';
+				const title = options && options.title ? options.title : pbT('confirm.title');
+				const text = options && options.text ? options.text : pbT('confirm.text');
+				const continueLabel = options && options.continueLabel ? options.continueLabel : pbT('common.confirmYes');
 				const fallbackMessage = options && options.fallbackMessage ? options.fallbackMessage : text;
 
 				if (!actionRiskConfirm || !actionRiskCancel || !actionRiskContinue || !actionRiskTitle || !actionRiskText) {
@@ -913,73 +941,45 @@
 
 			async function confirmDischargeAction() {
 				const isCurrentHour = isCurrentHourSelection();
-				const continueLabel = isCurrentHour ? 'Ja, start discharge' : 'Ja, bekræft discharge';
 				const cheapDischarge = isCheapDischargeSelection();
-				const priceLabel = formatPriceKr(activePrice);
+				const price = formatPriceKr(activePrice);
 				return confirmRiskAction({
-					title: cheapDischarge ? 'Bekræft afladning ved lav pris' : 'Bekræft tvungen afladning',
-					text: cheapDischarge
-						? `Du er ved at vælge Discharge i en billig time (${priceLabel}). Du vil tømme batteriet, selv om strømmen er billig nu. Vil du fortsætte?`
-						: 'Discharge kan tømme batteriet med op til 6 kW. Hvis huset bruger mindre, bliver resten sendt ud på nettet. Vil du fortsætte?',
-					continueLabel: continueLabel,
-					fallbackMessage: isCurrentHour
-						? (cheapDischarge
-							? `Er du sikker på, at du vil tømme batteriet nu ved lav pris (${priceLabel})?`
-							: 'Discharge vil starte en tvungen afladning af batteriet med op til 6 kW. Overskudsstrøm kan blive sendt ud på nettet. Vil du fortsætte?')
-						: (cheapDischarge
-							? `Er du sikker på, at du vil planlægge afladning ved lav pris (${priceLabel})?`
-							: 'Discharge vil planlægge en tvungen afladning af batteriet med op til 6 kW på det valgte tidspunkt. Overskudsstrøm kan blive sendt ud på nettet. Vil du fortsætte?')
+					title: pbT(cheapDischarge ? 'risk.discharge.cheapTitle' : 'risk.discharge.forcedTitle'),
+					text: cheapDischarge ? pbT('risk.discharge.cheapText', { price }) : pbT('risk.discharge.forcedText'),
+					continueLabel: pbT(isCurrentHour ? 'risk.discharge.yesStart' : 'risk.discharge.yesPlan'),
+					fallbackMessage: cheapDischarge
+						? pbT(isCurrentHour ? 'risk.discharge.nowCheap' : 'risk.discharge.planCheap', { price })
+						: pbT(isCurrentHour ? 'risk.discharge.nowForced' : 'risk.discharge.planForced')
 				});
 			}
 
 			async function confirmChargeAtExpensivePriceAction() {
 				const isCurrentHour = isCurrentHourSelection();
-				const priceLabel = formatPriceKr(activePrice);
+				const price = formatPriceKr(activePrice);
 				const veryExpensive = isVeryExpensiveSelection();
 				return confirmRiskAction({
-					title: veryExpensive ? 'Bekræft opladning i meget dyr time' : 'Bekræft opladning ved høj pris',
-					text: veryExpensive
-						? `Du er ved at vælge Charge i en meget dyr time (${priceLabel}). Opladning kan trække op til 6 kW, og strømprisen er meget høj i dette tidsrum. Vil du fortsætte?`
-						: `Du er ved at vælge Charge i en dyr time (${priceLabel}). Opladning kan trække op til 6 kW, og strømprisen er høj i dette tidsrum. Vil du fortsætte?`,
-					continueLabel: isCurrentHour ? 'Ja, start charge' : 'Ja, bekræft charge',
-					fallbackMessage: isCurrentHour
-						? (veryExpensive
-							? `Er du sikker på, at du vil starte opladning nu? Opladning kan trække op til 6 kW, og prisen er meget høj (${priceLabel}) i denne time.`
-							: `Er du sikker på, at du vil starte opladning nu? Opladning kan trække op til 6 kW, og prisen er høj (${priceLabel}) i denne time.`)
-						: (veryExpensive
-							? `Er du sikker på, at du vil planlægge opladning i dette tidsrum? Opladning kan trække op til 6 kW, og prisen er meget høj (${priceLabel}) i denne time.`
-							: `Er du sikker på, at du vil planlægge opladning i dette tidsrum? Opladning kan trække op til 6 kW, og prisen er høj (${priceLabel}) i denne time.`)
+					title: pbT(veryExpensive ? 'risk.charge.veryExpensiveTitle' : 'risk.charge.expensiveTitle'),
+					text: pbT(veryExpensive ? 'risk.charge.veryExpensiveText' : 'risk.charge.expensiveText', { price }),
+					continueLabel: pbT(isCurrentHour ? 'risk.charge.yesStart' : 'risk.charge.yesPlan'),
+					fallbackMessage: pbT(`risk.charge.${isCurrentHour ? 'now' : 'plan'}${veryExpensive ? 'VeryExpensive' : 'Expensive'}`, { price })
 				});
 			}
 
 			async function confirmHoldAtExpensivePriceAction() {
 				const isCurrentHour = isCurrentHourSelection();
-				const priceLabel = formatPriceKr(activePrice);
+				const price = formatPriceKr(activePrice);
 				const veryExpensive = isVeryExpensiveSelection();
 				return confirmRiskAction({
-					title: veryExpensive ? 'Bekræft hold i meget dyr time' : 'Bekræft hold i dyr time',
-					text: veryExpensive
-						? `Du er ved at vælge Hold i en meget dyr time (${priceLabel}). Det betyder, at batteriet ikke aflader i denne periode, når strømprisen er meget høj. Vil du fortsætte?`
-						: `Du er ved at vælge Hold i en dyr time (${priceLabel}). Det betyder, at batteriet ikke aflader i denne periode, når strømprisen er høj. Vil du fortsætte?`,
-					continueLabel: isCurrentHour ? 'Ja, start hold' : 'Ja, bekræft hold',
-					fallbackMessage: isCurrentHour
-						? (veryExpensive
-							? `Er du sikker på, at du vil sætte batteriet på Hold nu? Det betyder, at batteriet ikke aflader, når strømprisen er meget høj (${priceLabel}) i denne time.`
-							: `Er du sikker på, at du vil sætte batteriet på Hold nu? Det betyder, at batteriet ikke aflader, når strømprisen er høj (${priceLabel}) i denne time.`)
-						: (veryExpensive
-							? `Er du sikker på, at du vil planlægge Hold i dette tidsrum? Det betyder, at batteriet ikke aflader, når strømprisen er meget høj (${priceLabel}) i denne time.`
-							: `Er du sikker på, at du vil planlægge Hold i dette tidsrum? Det betyder, at batteriet ikke aflader, når strømprisen er høj (${priceLabel}) i denne time.`)
+					title: pbT(veryExpensive ? 'risk.hold.veryExpensiveTitle' : 'risk.hold.expensiveTitle'),
+					text: pbT(veryExpensive ? 'risk.hold.veryExpensiveText' : 'risk.hold.expensiveText', { price }),
+					continueLabel: pbT(isCurrentHour ? 'risk.hold.yesStart' : 'risk.hold.yesPlan'),
+					fallbackMessage: pbT(`risk.hold.${isCurrentHour ? 'now' : 'plan'}${veryExpensive ? 'VeryExpensive' : 'Expensive'}`, { price })
 				});
 			}
 
 			function actionLabel(actionName) {
-				switch ((actionName || '').toLowerCase()) {
-					case 'charge': return 'Charge';
-					case 'discharge': return 'Discharge';
-					case 'hold': return 'Hold';
-					case 'auto': return 'Auto';
-					default: return 'Ukendt';
-				}
+				const name = (actionName || '').toLowerCase();
+				return pbT(['charge', 'discharge', 'hold', 'auto'].includes(name) ? `action.${name}` : 'action.unknown');
 			}
 
 			function setSlotCategory(categoryName) {
@@ -991,14 +991,38 @@
 				}
 			}
 
-			function setCurrentActionChip(actionName) {
-				if (!currentActionChip) return;
-				currentActionChip.classList.remove('charge', 'discharge', 'hold', 'auto');
+			function fillActionChip(chip, actionName, prefix) {
+				chip.classList.remove('charge', 'discharge', 'hold', 'auto');
 				const normalized = (actionName || 'auto').toLowerCase();
 				if (normalized === 'charge' || normalized === 'discharge' || normalized === 'hold' || normalized === 'auto') {
-					currentActionChip.classList.add(normalized);
+					chip.classList.add(normalized);
 				}
-				currentActionChip.innerHTML = `<span class="chip-icon" aria-hidden="true">${actionIconSvg(normalized)}</span><span class="chip-label">${actionLabel(normalized)}</span>`;
+				const prefixHtml = prefix ? `<span class="chip-half">${prefix}</span>` : '';
+				chip.innerHTML = `${prefixHtml}<span class="chip-icon" aria-hidden="true">${actionIconSvg(normalized)}</span><span class="chip-label">${actionLabel(normalized)}</span>`;
+			}
+
+			function setCurrentActionChip(firstName, secondName) {
+				if (!currentActionChip) return;
+				let secondChip = document.getElementById('pbCurrentActionChipSecond');
+				const first = (firstName || 'auto').toLowerCase();
+				const second = (secondName || first).toLowerCase();
+				const split = first !== second;
+				const m = /^(\d{1,2})[.:](\d{2})/.exec(activeSlotLabel || '');
+				const hh = m ? m[1].padStart(2, '0') : '';
+				const nextHh = m ? String((Number(m[1]) + 1) % 24).padStart(2, '0') : '';
+				fillActionChip(currentActionChip, first, split && hh ? `${hh}.00–${hh}.30` : '');
+				if (split) {
+					if (!secondChip) {
+						secondChip = document.createElement('span');
+						secondChip.id = 'pbCurrentActionChipSecond';
+						secondChip.className = 'pb-current-action-chip';
+						currentActionChip.insertAdjacentElement('afterend', secondChip);
+					}
+					fillActionChip(secondChip, second, hh ? `${hh}.30–${nextHh}.00` : '');
+					secondChip.hidden = false;
+				} else if (secondChip) {
+					secondChip.hidden = true;
+				}
 			}
 
 			function setStatus(message, isError) {
@@ -1007,19 +1031,91 @@
 				status.style.color = isError ? '#fca5a5' : '#cbd5e1';
 			}
 
+			function barIsFull() {
+				return barFirstAction === barSecondAction && currentDuration === 'full';
+			}
+
+			function hasActionChanges() {
+				const nextSecond = activeDuration === 'split' ? activeOther : activeAction;
+				return activeAction !== barFirstAction || nextSecond !== barSecondAction;
+			}
+
+			function updateActionSaveVisibility() {
+				if (!saveActionButton) return;
+				saveActionButton.hidden = !hasActionChanges();
+			}
+
+			function halfRange(half) {
+				const m = /^(\d{1,2})[.:](\d{2})/.exec(activeSlotLabel || '');
+				if (!m) return '';
+				const hh = m[1].padStart(2, '0');
+				const nextHh = String((Number(m[1]) + 1) % 24).padStart(2, '0');
+				return half === 'first' ? ` (${hh}.00–${hh}.30)` : (half === 'second' ? ` (${hh}.30–${nextHh}.00)` : ` (${hh}.00–${nextHh}.00)`);
+			}
+
+			function renderActionLabels() {
+				const split = activeDuration === 'split';
+				if (primaryLabel) {
+					primaryLabel.textContent = pbT(split ? 'action.forFirstHalf' : 'action.forFull') + halfRange(split ? 'first' : 'full');
+					primaryLabel.setAttribute('data-half', split ? 'first' : 'full');
+				}
+				if (otherLabel) {
+					otherLabel.textContent = pbT('action.forSecondHalf') + halfRange('second');
+					otherLabel.setAttribute('data-half', 'second');
+				}
+				if (otherSection) {
+					otherSection.hidden = !split;
+				}
+			}
+
+			function setSelectedOther(nextAction) {
+				activeOther = (nextAction || 'auto').trim().toLowerCase();
+				otherChoiceButtons.forEach((btn) => {
+					const isSelected = (btn.getAttribute('data-action') || '').trim().toLowerCase() === activeOther;
+					const isCurrent = (btn.getAttribute('data-action') || '').trim().toLowerCase() === barSecondAction;
+					const lock = isCurrent && isSelected;
+					btn.classList.toggle('is-selected', isSelected && !lock);
+					btn.classList.toggle('is-current', lock);
+					btn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+					btn.disabled = lock || isSaving;
+				});
+				updateActionSaveVisibility();
+			}
+
 			function setSelectedAction(nextAction) {
 				activeAction = (nextAction || 'auto').trim().toLowerCase();
 				choiceButtons.forEach((btn) => {
 					const actionName = (btn.getAttribute('data-action') || '').trim().toLowerCase();
 					const isSelected = actionName === activeAction;
-					const isCurrent = actionName === currentAction;
-					btn.classList.toggle('is-selected', isSelected);
-					btn.classList.toggle('is-current', isCurrent);
+					const isCurrent = actionName === barFirstAction && (activeDuration === 'split' || barIsFull());
+					const isUnchangedCurrent = isCurrent && isSelected;
+					btn.classList.toggle('is-selected', isSelected && !isUnchangedCurrent);
+					btn.classList.toggle('is-current', isUnchangedCurrent);
 					btn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
-					btn.tabIndex = (isCurrent || isSaving) ? -1 : 0;
-					btn.disabled = isCurrent || isSaving;
-					btn.setAttribute('aria-disabled', (isCurrent || isSaving) ? 'true' : 'false');
+					btn.tabIndex = (isUnchangedCurrent || isSaving) ? -1 : 0;
+					btn.disabled = isUnchangedCurrent || isSaving;
+					btn.setAttribute('aria-disabled', (isUnchangedCurrent || isSaving) ? 'true' : 'false');
 				});
+				durationButtons.forEach((btn) => {
+					btn.disabled = isSaving;
+					btn.setAttribute('aria-disabled', isSaving ? 'true' : 'false');
+				});
+				updateActionSaveVisibility();
+			}
+
+			function setSelectedDuration(nextDuration) {
+				const previousDuration = activeDuration;
+				activeDuration = nextDuration === 'split' ? 'split' : 'full';
+				durationButtons.forEach((btn) => {
+					const isSelected = btn.getAttribute('data-duration') === activeDuration;
+					btn.classList.toggle('is-selected', isSelected);
+					btn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+				});
+				if (previousDuration !== activeDuration && activeDuration === 'split') {
+					setSelectedOther(barIsFull() ? 'auto' : barSecondAction);
+				}
+				renderActionLabels();
+				setSelectedAction(activeAction);
 			}
 
 			function updateActionChoicesLayout() {
@@ -1058,18 +1154,18 @@
 					const authorized = await requestAuthStatus();
 					if (authorized) {
 						showEditorPanel();
-						setStatus('Tryk på en handling for at gemme med det samme.', false);
+						setStatus(pbT('action.hintEditor'), false);
 					} else {
 						showLoginPanel();
-						setStatus('Log ind for at ændre handling for dette tidspunkt.', false);
+						setStatus(pbT('action.hintLogin'), false);
 					}
 				} catch (_) {
 					showLoginPanel();
-					setStatus('Kunne ikke tjekke login status.', true);
+					setStatus(pbT('login.checkFailed'), true);
 				}
 			}
 
-			function openModal(actionId, startTime, actionLabel, currentActionName, categoryName, priceValue) {
+			function openModal(actionId, startTime, actionLabel, firstAction, secondAction, durationName, categoryName, priceValue) {
 				modalMode = 'action';
 				pendingControlCommand = '';
 				hideActionRiskConfirm();
@@ -1077,11 +1173,20 @@
 				activeStartTime = startTime || '';
 				activeCategory = (categoryName || '').toLowerCase();
 				activePrice = Number.isFinite(priceValue) ? priceValue : null;
-				currentAction = (currentActionName || 'auto').trim().toLowerCase();
-				setSelectedAction(currentAction);
-				setCurrentActionChip(currentAction);
+				barFirstAction = (firstAction || 'auto').trim().toLowerCase();
+				barSecondAction = (secondAction || barFirstAction).trim().toLowerCase();
+				currentDuration = durationName === 'full' || !durationName ? 'full' : 'split';
+				if (barFirstAction !== barSecondAction) currentDuration = 'split';
+				activeSlotLabel = actionLabel || '';
+				activeDuration = currentDuration;
+				activeAction = barFirstAction;
+				activeOther = barSecondAction;
+				renderActionLabels();
+				setSelectedOther(activeOther);
+				setSelectedDuration(currentDuration);
+				setCurrentActionChip(barFirstAction, barSecondAction);
 				if (slot) {
-					slot.textContent = `Tidspunkt: ${actionLabel || '-'}`;
+					slot.textContent = pbT('action.slot', { slot: actionLabel || '-' });
 				}
 				setSlotCategory(activeCategory);
 				updateActionChoicesLayout();
@@ -1109,17 +1214,19 @@
 			actionTargets.forEach((target) => {
 				target.tabIndex = 0;
 				target.setAttribute('role', 'button');
-				target.setAttribute('aria-label', `Rediger handling for ${target.getAttribute('data-hour-label') || 'valgt time'}`);
+				target.setAttribute('aria-label', pbT('action.editFor', { slot: target.getAttribute('data-hour-label') || pbT('action.editForDefault') }));
 
 				const openFromTarget = () => {
 					const actionId = target.getAttribute('data-action-id') || '';
 					const startTime = target.getAttribute('data-start-time') || '';
 					const actionLabel = target.getAttribute('data-hour-label') || '';
-					const currentAction = (target.getAttribute('data-action') || 'auto').toLowerCase();
+					const firstAction = (target.getAttribute('data-action-first') || target.getAttribute('data-action') || 'auto').toLowerCase();
+					const secondAction = (target.getAttribute('data-action-second') || firstAction).toLowerCase();
+					const durationName = target.getAttribute('data-action-duration') || 'full';
 					const category = (target.getAttribute('data-category') || '').toLowerCase();
 					const priceRaw = target.getAttribute('data-price') || '';
 					const priceValue = Number.parseFloat(priceRaw);
-					openModal(actionId, startTime, actionLabel, currentAction, category, priceValue);
+					openModal(actionId, startTime, actionLabel, firstAction, secondAction, durationName, category, priceValue);
 				};
 
 				target.addEventListener('click', openFromTarget);
@@ -1131,79 +1238,96 @@
 				});
 			});
 
-			choiceButtons.forEach((btn) => {
-				btn.addEventListener('click', async () => {
-					if (isSaving) return;
-					const nextAction = (btn.getAttribute('data-action') || 'auto').toLowerCase();
-					if (nextAction === currentAction) {
+			async function confirmActionRisks(actionName) {
+				if (actionName === 'discharge' && !(await confirmDischargeAction())) return false;
+				if (actionName === 'charge' && isExpensiveSelection() && !(await confirmChargeAtExpensivePriceAction())) return false;
+				if (actionName === 'hold' && isExpensiveHoldSelection() && !(await confirmHoldAtExpensivePriceAction())) return false;
+				return true;
+			}
+
+			async function saveActionSelection(nextAction) {
+				if (isSaving) return;
+				const normalizedAction = (nextAction || 'auto').toLowerCase();
+				if (!hasActionChanges()) {
+					return;
+				}
+				const split = activeDuration === 'split';
+				if (normalizedAction !== barFirstAction && !(await confirmActionRisks(normalizedAction))) {
+					return;
+				}
+				if (split && activeOther !== barSecondAction && !(await confirmActionRisks(activeOther))) {
+					return;
+				}
+
+				setSelectedAction(normalizedAction);
+				isSaving = true;
+				if (saveActionButton) saveActionButton.disabled = true;
+				setStatus(pbT('action.saving'), false);
+				let saved = false;
+				try {
+					const body = new URLSearchParams();
+					if (activeActionId) body.set('actionId', activeActionId);
+					if (activeStartTime) body.set('startTime', activeStartTime);
+					body.set('actionName', normalizedAction);
+					body.set('actionDuration', split ? 'first_half' : 'full');
+					if (split) body.set('otherAction', activeOther);
+					const res = await fetch('?action=planning-update', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+						body: body.toString()
+					});
+					const data = await res.json();
+					if (res.ok && data && data.ok) {
+						saved = true;
+						closeModal();
+						persistChartScrollForReload();
+						const reloadUrl = new URL(window.location.href);
+						reloadUrl.searchParams.set('pbRefresh', String(Date.now()));
+						window.location.replace(reloadUrl.toString());
 						return;
 					}
-
-					if (nextAction === 'discharge') {
-						const confirmDischarge = await confirmDischargeAction();
-						if (!confirmDischarge) {
-							return;
-						}
+					if (data && data.error === 'unauthorized') {
+						showLoginPanel();
+						setStatus(pbT('action.sessionExpired'), true);
+						return;
 					}
+					const errCode = (data && (data.error || data.statusCode || data.message)) ? ` (${data.error || data.statusCode || data.message})` : '';
+					setStatus(pbT('action.saveFailed', { code: errCode }), true);
+				} catch (_) {
+					setStatus(pbT('action.saveFailed', { code: '' }), true);
+				} finally {
+					isSaving = false;
+					if (saveActionButton) saveActionButton.disabled = false;
+					setSelectedAction(activeAction);
+					setSelectedOther(activeOther);
+					renderActionLabels();
+				}
+			}
 
-					if (nextAction === 'charge' && isExpensiveSelection()) {
-						const confirmCharge = await confirmChargeAtExpensivePriceAction();
-						if (!confirmCharge) {
-							return;
-						}
-					}
-
-					if (nextAction === 'hold' && isExpensiveHoldSelection()) {
-						const confirmHold = await confirmHoldAtExpensivePriceAction();
-						if (!confirmHold) {
-							return;
-						}
-					}
-
-					setSelectedAction(nextAction);
-					isSaving = true;
-					setSelectedAction(nextAction);
-					setStatus('Gemmer ændring...', false);
-
-					let saved = false;
-					try {
-						const body = new URLSearchParams();
-						if (activeActionId) body.set('actionId', activeActionId);
-						if (activeStartTime) body.set('startTime', activeStartTime);
-						body.set('actionName', nextAction);
-						const res = await fetch('?action=planning-update', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-							body: body.toString()
-						});
-						const data = await res.json();
-						if (res.ok && data && data.ok) {
-							saved = true;
-							closeModal();
-							persistChartScrollForReload();
-							const reloadUrl = new URL(window.location.href);
-							reloadUrl.searchParams.set('pbRefresh', String(Date.now()));
-							window.location.replace(reloadUrl.toString());
-							return;
-						}
-						if (data && data.error === 'unauthorized') {
-							showLoginPanel();
-							setStatus('Session udløbet. Log ind igen.', true);
-							return;
-						}
-						const errCode = (data && (data.error || data.statusCode || data.message)) ? ` (${data.error || data.statusCode || data.message})` : '';
-						setStatus(`Kunne ikke gemme handling${errCode}.`, true);
-					} catch (_) {
-						setStatus('Kunne ikke gemme handling.', true);
-					} finally {
-						if (!saved) {
-							activeAction = currentAction;
-						}
-						isSaving = false;
-						setSelectedAction(activeAction);
-					}
+			choiceButtons.forEach((btn) => {
+				btn.addEventListener('click', () => {
+					setSelectedAction((btn.getAttribute('data-action') || 'auto').toLowerCase());
 				});
 			});
+
+			otherChoiceButtons.forEach((btn) => {
+				btn.addEventListener('click', () => {
+					setSelectedOther((btn.getAttribute('data-action') || 'auto').toLowerCase());
+				});
+			});
+
+			durationButtons.forEach((btn) => {
+				btn.addEventListener('click', () => {
+					const nextDuration = btn.getAttribute('data-duration') || 'full';
+					setSelectedDuration(nextDuration);
+				});
+			});
+
+			if (saveActionButton) {
+				saveActionButton.addEventListener('click', () => {
+					saveActionSelection(activeAction);
+				});
+			}
 
 			if (loginForm) {
 				loginForm.addEventListener('submit', async (event) => {
@@ -1212,12 +1336,12 @@
 
 					const password = loginPassword.value.trim();
 					if (!password) {
-						setStatus('Indtast adgangskode.', true);
+						setStatus(pbT('login.enterPassword'), true);
 						return;
 					}
 
 					loginSubmit.disabled = true;
-					setStatus('Logger ind...', false);
+					setStatus(pbT('login.progress'), false);
 					try {
 						const body = new URLSearchParams();
 						body.set('password', password);
@@ -1250,14 +1374,14 @@
 							}
 							showEditorPanel();
 							setSelectedAction(currentAction);
-							setStatus('Login godkendt. Tryk på en handling for at gemme.', false);
+							setStatus(pbT('action.hintLoginOk'), false);
 						} else if (res.status === 401) {
-							setStatus('Forkert adgangskode.', true);
+							setStatus(pbT('login.wrongPassword'), true);
 						} else {
-							setStatus('Login kunne ikke gennemføres. Prøv igen.', true);
+							setStatus(pbT('login.failedRetry'), true);
 						}
 					} catch (_) {
-						setStatus('Login fejlede. Prøv igen.', true);
+						setStatus(pbT('login.errorRetry'), true);
 					} finally {
 						loginSubmit.disabled = false;
 					}
@@ -1353,13 +1477,20 @@
 			const settingsStatus = document.getElementById('pbSettingsStatus');
 			const settingsActions = Array.from(document.querySelectorAll('[data-settings-action]'));
 			const dummyPricesToggle = document.getElementById('pbDummyPricesToggle');
+			const languageFlags = Array.from(document.querySelectorAll('.pb-language-flag'));
+			const setActiveLanguageFlag = (code) => languageFlags.forEach((btn) => {
+				const active = btn.getAttribute('data-language') === code;
+				btn.classList.toggle('is-active', active);
+				btn.setAttribute('aria-checked', active ? 'true' : 'false');
+			});
+			setActiveLanguageFlag({ da: 'DK', en: 'EN', de: 'DE' }[window.PB_LANG] || 'DK');
 			let isAuthorized = false;
 
 			function setMenuState(authorized) {
 				isAuthorized = !!authorized;
 				if (!menuButton) return;
 				menuButton.classList.toggle('is-locked', !isAuthorized);
-				menuButton.setAttribute('aria-label', isAuthorized ? 'Menu' : 'Log ind');
+				menuButton.setAttribute('aria-label', pbT(isAuthorized ? 'menu.title' : 'menu.login'));
 				if (!menuIcon) return;
 				if (isAuthorized) {
 					menuIcon.innerHTML = '<span class="pb-menu-button-lines"><span></span><span></span><span></span></span>';
@@ -1421,6 +1552,7 @@
 				document.body.classList.add('pb-modal-open');
 				if (settingsStatus) settingsStatus.textContent = '';
 				loadDummyPriceSetting();
+				loadLanguageSetting();
 			}
 
 			function settingsActionUrl() {
@@ -1451,10 +1583,20 @@
 					dummyPricesToggle.checked = Boolean(data.enabled);
 				} catch (error) {
 					if (settingsStatus) settingsStatus.textContent = error && error.message === 'unauthorized'
-						? 'Sessionen er udløbet. Log ind igen.'
-						: `Indstillingen kunne ikke hentes: ${error && error.message ? error.message : 'ukendt fejl'}.`;
+						? pbT('common.sessionExpired')
+						: pbT('settings.loadFailed', { error: error && error.message ? error.message : pbT('common.unknownError') });
 				} finally {
 					dummyPricesToggle.disabled = false;
+				}
+			}
+
+			async function loadLanguageSetting() {
+				if (!languageFlags.length || !isAuthorized) return;
+				try {
+					const data = await postSettingsAction({ action: 'language-status' });
+					setActiveLanguageFlag(String(data.language || 'DK'));
+				} catch (_) {
+					// Keep the server-rendered selection when status lookup fails.
 				}
 			}
 
@@ -1548,7 +1690,7 @@
 				const entries = cleanLogLines(lines);
 				logOutput.innerHTML = '';
 				if (!entries.length) {
-					logOutput.innerHTML = '<div class="pb-log-line"><div class="pb-log-message">Ingen logposter matcher filteret.</div></div>';
+					logOutput.innerHTML = '<div class="pb-log-line"><div class="pb-log-message">' + pbT('log.noMatch') + '</div></div>';
 					return;
 				}
 
@@ -1612,7 +1754,7 @@
 				}
 			}
 
-			function setLogUnavailableState(message = 'Loggen er ikke tilgængelig. Log ind for at se data.') {
+			function setLogUnavailableState(message = pbT('log.unavailable')) {
 				if (logOutput) {
 					logOutput.dataset.rawText = '';
 					logOutput.innerHTML = '';
@@ -1626,7 +1768,7 @@
 					button.setAttribute('aria-hidden', 'true');
 				});
 				if (logStatus) {
-					logStatus.textContent = 'Du skal være logget ind for at se loggen.';
+					logStatus.textContent = pbT('log.statusLoginRequired');
 				}
 			}
 
@@ -1636,10 +1778,10 @@
 				logModal.setAttribute('aria-hidden', 'false');
 				document.body.classList.add('pb-modal-open');
 				if (logStatus) {
-					logStatus.textContent = 'Kontrollerer login...';
+					logStatus.textContent = pbT('log.checking');
 				}
 				if (logOutput) {
-					logOutput.textContent = 'Kontrollerer login...';
+					logOutput.textContent = pbT('log.checking');
 				}
 
 				const authOk = await refreshAuthState();
@@ -1649,10 +1791,10 @@
 				}
 
 				if (logStatus) {
-					logStatus.textContent = 'Henter log...';
+					logStatus.textContent = pbT('log.loading');
 				}
 				if (logOutput) {
-					logOutput.textContent = 'Henter log...';
+					logOutput.textContent = pbT('log.loading');
 				}
 
 				try {
@@ -1673,10 +1815,10 @@
 						const rows = rawText ? rawText.split(/\n/).filter((entry) => entry.trim()) : [];
 						renderLogRows(rows.slice().reverse());
 						if (!rows.length) {
-							logOutput.textContent = 'Ingen logdata tilgængelig.';
+							logOutput.textContent = pbT('log.empty');
 						}
 					}
-					if (logStatus) logStatus.textContent = data && data.path ? `Logfil: ${data.path}` : 'Log hentet.';
+					if (logStatus) logStatus.textContent = data && data.path ? pbT('log.file', { path: data.path }) : pbT('log.loaded');
 					setLogFilter(activeLogFilter);
 				} catch (_) {
 					setLogUnavailableState();
@@ -1742,18 +1884,34 @@
 					const action = button.getAttribute('data-settings-action') || '';
 					if (!action || !isAuthorized) return;
 					settingsActions.forEach((item) => { item.disabled = true; });
-					if (settingsStatus) settingsStatus.textContent = 'Kører handling...';
+					if (settingsStatus) settingsStatus.textContent = pbT('settings.running');
 					try {
 						await postSettingsAction({ action });
-						if (settingsStatus) settingsStatus.textContent = 'Handling gennemført. Opdaterer...';
+						if (settingsStatus) settingsStatus.textContent = pbT('settings.done');
 						window.setTimeout(() => window.location.reload(), 250);
 					} catch (error) {
 						if (settingsStatus) {
 							settingsStatus.textContent = error && error.message === 'unauthorized'
-								? 'Sessionen er udløbet. Log ind igen.'
-								: 'Handlingen kunne ikke gennemføres. Prøv igen.';
+								? pbT('common.sessionExpired')
+								: pbT('settings.failed');
 						}
 						settingsActions.forEach((item) => { item.disabled = false; });
+					}
+				});
+			});
+
+			languageFlags.forEach((btn) => {
+				btn.addEventListener('click', async () => {
+					if (!isAuthorized || btn.classList.contains('is-active')) return;
+					languageFlags.forEach((b) => { b.disabled = true; });
+					try {
+						await postSettingsAction({ action: 'set-language', language: btn.getAttribute('data-language') });
+						window.location.reload();
+					} catch (error) {
+						languageFlags.forEach((b) => { b.disabled = false; });
+						if (settingsStatus) settingsStatus.textContent = error && error.message === 'unauthorized'
+							? pbT('common.sessionExpired')
+							: pbT('settings.saveFailed', { error: error && error.message ? error.message : pbT('common.unknownError') });
 					}
 				});
 			});
@@ -1770,8 +1928,8 @@
 					} catch (error) {
 						dummyPricesToggle.checked = !enabled;
 						if (settingsStatus) settingsStatus.textContent = error && error.message === 'unauthorized'
-							? 'Sessionen er udløbet. Log ind igen.'
-							: `Indstillingen kunne ikke gemmes: ${error && error.message ? error.message : 'ukendt fejl'}.`;
+							? pbT('common.sessionExpired')
+							: pbT('settings.saveFailed', { error: error && error.message ? error.message : pbT('common.unknownError') });
 					} finally {
 						dummyPricesToggle.disabled = false;
 					}
@@ -1819,11 +1977,11 @@
 					if (!headerLoginPassword || !headerLoginSubmit) return;
 					const password = headerLoginPassword.value.trim();
 					if (!password) {
-						if (headerLoginStatus) headerLoginStatus.textContent = 'Indtast adgangskode.';
+						if (headerLoginStatus) headerLoginStatus.textContent = pbT('login.enterPassword');
 						return;
 					}
 					headerLoginSubmit.disabled = true;
-					if (headerLoginStatus) headerLoginStatus.textContent = 'Logger ind...';
+					if (headerLoginStatus) headerLoginStatus.textContent = pbT('login.progress');
 					const body = new URLSearchParams();
 					body.set('password', password);
 					body.set('txtLogin', password);
@@ -1845,11 +2003,11 @@
 						}
 						if (headerLoginStatus) {
 							headerLoginStatus.textContent = res.status === 401
-								? 'Forkert adgangskode.'
-								: 'Login kunne ikke gennemføres. Prøv igen.';
+								? pbT('login.wrongPassword')
+								: pbT('login.failedRetry');
 						}
 					} catch (_) {
-						if (headerLoginStatus) headerLoginStatus.textContent = 'Login fejlede. Prøv igen.';
+						if (headerLoginStatus) headerLoginStatus.textContent = pbT('login.errorRetry');
 					} finally {
 						headerLoginSubmit.disabled = false;
 					}
@@ -1912,7 +2070,7 @@
 				if (pullPx <= 0) {
 					indicator.classList.remove('visible', 'ready');
 					indicator.style.transform = 'translate(-50%, -140%)';
-					indicatorText.textContent = 'Træk ned for at opdatere';
+					indicatorText.textContent = pbT('pull.pull');
 					return;
 				}
 
@@ -1921,7 +2079,7 @@
 				indicator.classList.add('visible');
 				indicator.classList.toggle('ready', isReady);
 				indicator.style.transform = `translate(-50%, calc(-140% + ${travel}px))`;
-				indicatorText.textContent = isReady ? 'Slip for at opdatere' : 'Træk ned for at opdatere';
+				indicatorText.textContent = pbT(isReady ? 'pull.release' : 'pull.pull');
 			}
 
 			window.addEventListener('touchstart', (event) => {
@@ -1978,7 +2136,7 @@
 			window.addEventListener('touchend', () => {
 				if (isPullingFromTop && maxPull >= pullThresholdPx) {
 					if (indicatorText) {
-						indicatorText.textContent = 'Opdaterer...';
+						indicatorText.textContent = pbT('pull.refreshing');
 					}
 					window.setTimeout(() => {
 						window.location.reload();
@@ -2021,7 +2179,7 @@
 
 		(function () {
 			const round1 = (n) => Math.round(n * 10) / 10;
-			const toDa = (n) => round1(n).toFixed(1).replace('.', ',');
+			const toDa = (n) => pbDecimal(round1(n).toFixed(1));
 			// Formatér watt: under 1000 W vises som "XXX W", ellers "X,Y kW"
 			const formatPower = (w) => {
 				const absW = Math.abs(w);
@@ -2037,7 +2195,7 @@
 			let batteryDisplayMode = 'percent';
 			let latestBatterySoc = 0;
 			let latestBatteryEtaMinutes = null;
-			let latestBatteryFlowText = 'Standby';
+			let latestBatteryFlowText = pbT('hero.standby');
 			let latestBatteryClockLabel = '';
 			let latestBatteryPowerW = 0;
 			let latestBatteryCapacityKwh = null;
@@ -2046,7 +2204,7 @@
 				const safeMinutes = Math.max(0, Math.round(totalMinutes));
 				const hours = Math.floor(safeMinutes / 60);
 				const minutes = safeMinutes % 60;
-				return `${hours} t ${minutes} m`;
+				return pbT('battery.etaFormat', { h: hours, m: minutes });
 			}
 
 			function formatClockFromNow(totalMinutes) {
@@ -2174,7 +2332,7 @@
 				}
 
 				if (latestBatteryEtaMinutes === null) {
-					return 'Tid -';
+					return pbT('battery.timeUnknown');
 				}
 
 				return formatEtaMinutes(latestBatteryEtaMinutes);
@@ -2185,9 +2343,9 @@
 				const isTimeMode = batteryDisplayMode === 'time';
 				const isPowerCapacityMode = batteryDisplayMode === 'power-capacity';
 				const secondaryLine = isTimeMode
-					? (latestBatteryClockLabel || 'Tom/Fuld kl. -')
+					? (latestBatteryClockLabel || pbT('battery.emptyFullUnknown'))
 					: (isPowerCapacityMode
-						? (latestBatteryCapacityKwh !== null ? `Kapacitet ${toDa(latestBatteryCapacityKwh)} kWh` : 'Kapacitet -')
+						? (latestBatteryCapacityKwh !== null ? pbT('battery.capacity', { value: toDa(latestBatteryCapacityKwh) }) : pbT('battery.capacityUnknown'))
 						: latestBatteryFlowText);
 
 				setText('pbBatteryValue', displayValue);
@@ -2210,7 +2368,7 @@
 			function bindBatteryToggle(el) {
 				if (!el) return;
 				el.style.cursor = 'pointer';
-				el.title = 'Skift mellem %, tid og kapacitet';
+				el.title = pbT('battery.toggleTitle');
 				el.addEventListener('click', function (event) {
 					event.preventDefault();
 					event.stopPropagation();
@@ -2260,7 +2418,7 @@
 					return;
 				}
 
-				const kwText = `${(chargerPowerW / 1000).toFixed(1).replace('.', ',')} kW`;
+				const kwText = `${pbDecimal((chargerPowerW / 1000).toFixed(1))} kW`;
 
 				setText('pbEvBadgeValue', kwText);
 				setText('pbEvInlineValue', kwText);
@@ -2279,13 +2437,13 @@
 
 				const isBackupMode = asBool(data && data.is_backup_mode);
 				const gridArrow = gridPowerW > 0 ? '↓' : (gridPowerW < 0 ? '↑' : '•');
-				const gridLabel = isBackupMode ? '⚠️ Backupdrift' : (gridPowerW > 0 ? 'Køber' : (gridPowerW < 0 ? 'Sælger' : 'Standby'));
+				const gridLabel = isBackupMode ? `⚠️ ${pbT('hero.backup')}` : pbT(gridPowerW > 0 ? 'hero.buying' : (gridPowerW < 0 ? 'hero.selling' : 'hero.standby'));
 				const gridClass = gridPowerW > 0 ? 'net-import' : (gridPowerW < 0 ? 'net-export' : 'net-idle');
 
 				const batteryCharging = batteryPowerW < -10;
 				const batteryDischarging = batteryPowerW > 10;
 				const battArrow = batteryCharging ? '↑' : (batteryDischarging ? '↓' : '');
-				const battLabel = batteryCharging ? 'Lader' : (batteryDischarging ? 'Aflader' : 'Standby');
+				const battLabel = pbT(batteryCharging ? 'hero.charging' : (batteryDischarging ? 'hero.discharging' : 'hero.standby'));
 				const battClass = batteryCharging ? 'battery-charge' : (batteryDischarging ? 'battery-discharge' : 'battery-idle');
 
 				latestBatterySoc = batterySoc;
@@ -2300,9 +2458,9 @@
 					const clockText = formatClockFromNow(latestBatteryEtaMinutes);
 					if (clockText) {
 						if (batteryDischarging) {
-							latestBatteryClockLabel = `Tom kl. ${clockText}`;
+							latestBatteryClockLabel = pbT('battery.emptyAt', { time: clockText });
 						} else if (batteryCharging) {
-							latestBatteryClockLabel = `Fuld kl. ${clockText}`;
+							latestBatteryClockLabel = pbT('battery.fullAt', { time: clockText });
 						}
 					}
 				}
@@ -2383,7 +2541,7 @@
 					trigger.style.cursor = 'pointer';
 					trigger.setAttribute('role', 'button');
 					trigger.setAttribute('tabindex', '0');
-					trigger.setAttribute('title', 'Åbn batterioversigt');
+					trigger.setAttribute('title', pbT('battery.openOverview'));
 				});
 			}
 

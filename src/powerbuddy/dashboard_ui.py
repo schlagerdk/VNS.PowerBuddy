@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from html import escape
+import json
 from pathlib import Path
 import re
+
+from powerbuddy.i18n import current_language, get_catalog
 
 
 _SOURCE_TEMPLATE_PATH = Path(__file__).resolve().parent / "static" / "powerbuddy.html"
@@ -61,6 +65,17 @@ def render_dashboard_html(*, title: str, icon_url: str, favicon_url: str, apple_
             count=1,
             flags=re.S,
         )
+        language = current_language()
+        catalog = get_catalog(language)
+        html = re.sub(
+            r"\{\{t:([A-Za-z0-9_.]+)\}\}",
+            lambda m: escape(catalog.get(m.group(1), m.group(1))),
+            html,
+        )
+        html = html.replace('<html lang="da">', f'<html lang="{language}">', 1)
+        payload = json.dumps(catalog, ensure_ascii=False).replace("</", "<\\/")
+        i18n_script = f'<script>window.PB_LANG={json.dumps(language)};window.PB_I18N={payload};</script>\n\t'
+        html = html.replace('<script src="/powerbuddy/static/scripts/powerbuddy.js', i18n_script + '<script src="/powerbuddy/static/scripts/powerbuddy.js', 1)
         return html
 
     # Fail-safe fallback if template file is missing.

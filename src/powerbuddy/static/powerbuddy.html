@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260921d" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260921s" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -30,12 +30,12 @@
 	</svg>
 	<div id="pullRefreshIndicator" class="pull-refresh-indicator" aria-hidden="true">
 		<span class="pull-refresh-arrow">↓</span>
-		<span id="pullRefreshText" class="pull-refresh-text">Træk ned for at opdatere</span>
+		<span id="pullRefreshText" class="pull-refresh-text">{{t:pull.pull}}</span>
 	</div>
 	<div class="page">
 			<div class="header">
 				<div class="brand">
-					<div id="logoRefresh" class="brand-icon is-refreshable" role="button" tabindex="0" title="Opdater siden" aria-label="Opdater siden">
+					<div id="logoRefresh" class="brand-icon is-refreshable" role="button" tabindex="0" title="{{t:header.refresh}}" aria-label="{{t:header.refresh}}">
 						<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
 							<path d="M13 2L5 14H11L10 22L19 9H13V2Z" fill="#36D1A5"/>
 							<circle cx="17.5" cy="17.5" r="3.5" fill="#2EB6D4" fill-opacity="0.35"/>
@@ -44,23 +44,23 @@
 					</div>
 					<div>
 						<h1>PowerBuddy</h1>
-						<p>Pris- og energioverblik med PowerBuddy</p>
+						<p>{{t:header.subtitle}}</p>
 					</div>
 				</div>
 				<div class="header-actions">
-					<button id="pbHeaderMenuButton" class="pb-menu-button" type="button" aria-label="Menu" aria-expanded="false">
+					<button id="pbHeaderMenuButton" class="pb-menu-button" type="button" aria-label="{{t:menu.title}}" aria-expanded="false">
 						<span id="pbHeaderMenuIcon" class="pb-menu-button-icon" aria-hidden="true">
 							<span class="pb-menu-button-lines"><span></span><span></span><span></span></span>
 						</span>
 					</button>
 					<div id="pbMenuPanel" class="pb-menu-panel" aria-hidden="true">
 						<div class="pb-menu-panel-card">
-							<div class="pb-menu-section-title">Menu</div>
+							<div class="pb-menu-section-title">{{t:menu.title}}</div>
 							<button type="button" class="pb-menu-item" data-menu-action="logs">
-								<span class="pb-menu-item-label">Log</span>
+								<span class="pb-menu-item-label">{{t:menu.logs}}</span>
 							</button>
 							<button type="button" class="pb-menu-item" data-menu-action="settings">
-								<span class="pb-menu-item-label">Indstillinger</span>
+								<span class="pb-menu-item-label">{{t:menu.settings}}</span>
 							</button>
 						</div>
 					</div>
@@ -70,21 +70,21 @@
 			<div id="pbLogModal" class="pb-log-modal" aria-hidden="true">
 				<div class="pb-log-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbLogModalTitle">
 					<div class="pb-log-modal-head">
-						<div id="pbLogModalTitle" class="pb-log-modal-title">PowerBuddy log</div>
-						<button id="pbLogModalClose" type="button" class="pb-log-modal-close" aria-label="Luk log">&times;</button>
+						<div id="pbLogModalTitle" class="pb-log-modal-title">{{t:log.title}}</div>
+						<button id="pbLogModalClose" type="button" class="pb-log-modal-close" aria-label="{{t:log.close}}">&times;</button>
 					</div>
 					<div class="pb-log-modal-toolbar">
-						<div class="pb-log-filter-group" role="group" aria-label="Logfilter">
-							<button type="button" class="pb-log-filter is-active" data-log-filter="all">Alle</button>
-							<button type="button" class="pb-log-filter" data-log-filter="error">Error</button>
-							<button type="button" class="pb-log-filter" data-log-filter="warning">Warning</button>
-							<button type="button" class="pb-log-filter" data-log-filter="info">Info</button>
+						<div class="pb-log-filter-group" role="group" aria-label="{{t:log.filterAria}}">
+							<button type="button" class="pb-log-filter is-active" data-log-filter="all">{{t:log.filter.all}}</button>
+							<button type="button" class="pb-log-filter" data-log-filter="error">{{t:log.filter.error}}</button>
+							<button type="button" class="pb-log-filter" data-log-filter="warning">{{t:log.filter.warning}}</button>
+							<button type="button" class="pb-log-filter" data-log-filter="info">{{t:log.filter.info}}</button>
 						</div>
-						<input id="pbLogSearch" class="pb-log-search" type="search" placeholder="Filtrer tekst..." aria-label="Filtrer logtekst" />
+						<input id="pbLogSearch" class="pb-log-search" type="search" placeholder="{{t:log.searchPlaceholder}}" aria-label="{{t:log.searchAria}}" />
 					</div>
 					<div class="pb-log-modal-body">
-						<div id="pbLogStatus" class="pb-log-status">Logger ind for at se loggen.</div>
-						<div id="pbLogOutput" class="pb-log-output">Ingen logdata tilgængelig.</div>
+						<div id="pbLogStatus" class="pb-log-status">{{t:log.loginRequired}}</div>
+						<div id="pbLogOutput" class="pb-log-output">{{t:log.empty}}</div>
 					</div>
 				</div>
 			</div>
@@ -92,13 +92,13 @@
 			<div id="pbHeaderLoginModal" class="pb-log-modal" aria-hidden="true">
 				<div class="pb-log-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbHeaderLoginTitle">
 					<div class="pb-log-modal-head">
-						<div id="pbHeaderLoginTitle" class="pb-log-modal-title">Login</div>
-						<button id="pbHeaderLoginClose" type="button" class="pb-log-modal-close" aria-label="Luk login">&times;</button>
+						<div id="pbHeaderLoginTitle" class="pb-log-modal-title">{{t:login.title}}</div>
+						<button id="pbHeaderLoginClose" type="button" class="pb-log-modal-close" aria-label="{{t:login.close}}">&times;</button>
 					</div>
 					<div class="pb-log-modal-body">
 						<form id="pbHeaderLoginForm" class="pb-login-form">
-							<input id="pbHeaderLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="Adgangskode" required />
-							<button id="pbHeaderLoginSubmit" type="submit" class="pb-login-submit">Login</button>
+							<input id="pbHeaderLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="{{t:login.password}}" required />
+							<button id="pbHeaderLoginSubmit" type="submit" class="pb-login-submit">{{t:login.submit}}</button>
 						</form>
 						<div id="pbHeaderLoginStatus" class="pb-log-status" aria-live="polite"></div>
 					</div>
@@ -108,29 +108,37 @@
 			<div id="pbSettingsModal" class="pb-log-modal" aria-hidden="true">
 				<div class="pb-log-modal-card pb-settings-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbSettingsModalTitle">
 					<div class="pb-log-modal-head">
-						<div id="pbSettingsModalTitle" class="pb-log-modal-title">Indstillinger</div>
-						<button id="pbSettingsModalClose" type="button" class="pb-log-modal-close" aria-label="Luk indstillinger">&times;</button>
+						<div id="pbSettingsModalTitle" class="pb-log-modal-title">{{t:settings.title}}</div>
+						<button id="pbSettingsModalClose" type="button" class="pb-log-modal-close" aria-label="{{t:settings.close}}">&times;</button>
 					</div>
 					<div class="pb-settings-body">
-						<div class="pb-settings-intro">Manuelle systemhandlinger</div>
+						<div class="pb-settings-intro">{{t:settings.intro}}</div>
 						<div class="pb-settings-actions">
-							<button type="button" class="pb-settings-action" data-settings-action="fetch-prices">
+							<button type="button" class="pb-settings-action" data-settings-action="fetch-prices" title="{{t:settings.fetchPrices.desc}}">
 								<span class="pb-settings-action-icon" aria-hidden="true">↻</span>
-								<span><strong>Hent priser nu</strong><small>Opdater prisdata uden at ændre planen</small></span>
+								<span><strong>{{t:settings.fetchPrices.title}}</strong><small>{{t:settings.fetchPrices.desc}}</small></span>
 							</button>
-							<button type="button" class="pb-settings-action" data-settings-action="generate-plan">
+							<button type="button" class="pb-settings-action" data-settings-action="generate-plan" title="{{t:settings.generatePlan.desc}}">
 								<span class="pb-settings-action-icon" aria-hidden="true">⌁</span>
-								<span><strong>Lav plan nu</strong><small>Generér plan ud fra gemte priser</small></span>
+								<span><strong>{{t:settings.generatePlan.title}}</strong><small>{{t:settings.generatePlan.desc}}</small></span>
 							</button>
-							<button type="button" class="pb-settings-action is-primary" data-settings-action="refresh-and-plan">
+							<button type="button" class="pb-settings-action" data-settings-action="refresh-and-plan" title="{{t:settings.refreshAndPlan.desc}}">
 								<span class="pb-settings-action-icon" aria-hidden="true">↻</span>
-								<span><strong>Hent priser og lav plan</strong><small>Kør begge trin for hele planlægningsvinduet</small></span>
+								<span><strong>{{t:settings.refreshAndPlan.title}}</strong><small>{{t:settings.refreshAndPlan.desc}}</small></span>
 							</button>
 						</div>
 						<label class="pb-settings-toggle" for="pbDummyPricesToggle">
-							<span><strong>Tillad dummypriser</strong><small>Vis kun midlertidige nulpriser, når rigtige priser mangler</small></span>
+							<span><strong>{{t:settings.dummyPrices.title}}</strong><small>{{t:settings.dummyPrices.desc}}</small></span>
 							<input id="pbDummyPricesToggle" type="checkbox" role="switch" />
 						</label>
+						<div class="pb-settings-toggle pb-settings-language">
+							<span><strong>{{t:settings.language.title}}</strong></span>
+							<div id="pbLanguageFlags" class="pb-language-flags" role="radiogroup" aria-label="{{t:settings.language.title}}">
+								<button type="button" class="pb-language-flag" data-language="DK" title="Dansk" aria-label="Dansk" aria-checked="false">🇩🇰</button>
+								<button type="button" class="pb-language-flag" data-language="EN" title="English" aria-label="English" aria-checked="false">🇬🇧</button>
+								<button type="button" class="pb-language-flag" data-language="DE" title="Deutsch" aria-label="Deutsch" aria-checked="false">🇩🇪</button>
+							</div>
+						</div>
 						<div id="pbSettingsStatus" class="pb-log-status" aria-live="polite"></div>
 					</div>
 				</div>
@@ -142,22 +150,22 @@
 					<div class="hero-pane hero-pane-price">
 						<div class="current-hour">
 							<div class="hero-col">
-								<div class="hero-price-label">Pris Lige Nu</div>
+								<div class="hero-price-label">{{t:hero.priceNow}}</div>
 								<div class="hero-price">1,09 kr</div>
 									<div class="alert pb-now-alert alert-info d-flex align-items-center" role="alert">
-										<svg class="pb-now-alert-icon bi flex-shrink-0 me-2" role="img" aria-label="Info:">
+										<svg class="pb-now-alert-icon bi flex-shrink-0 me-2" role="img" aria-label="{{t:alert.label.medium}}">
 											<use href="#info-fill" xlink:href="#info-fill"></use>
 										</svg>
 										<div class="pb-now-alert-content">
-											<div class="pb-now-alert-text">Fornuftig pris - helt ok</div>
+											<div class="pb-now-alert-text">{{t:alert.medium}}</div>
 										</div>
 									</div>
 								<div class="hero-energy-mobile ">
-									<span id="pbNetBadge" class="hero-energy-badge net net-export"><span class="badge-label">🔌 Net:</span> <span id="pbNetBadgeValue">&#x2191; 293 W</span></span>
-									<span class="hero-energy-badge solar"><span class="badge-label">☀️ Sol:</span> <span id="pbSolarBadgeValue">3,2 kW</span></span>
-									<span class="hero-energy-badge consumption"><span class="badge-label">⚡ Forbrug:</span> <span id="pbConsumptionBadgeValue">2,8 kW</span></span>
+									<span id="pbNetBadge" class="hero-energy-badge net net-export"><span class="badge-label">🔌 {{t:hero.netBadge}}</span> <span id="pbNetBadgeValue">&#x2191; 293 W</span></span>
+									<span class="hero-energy-badge solar"><span class="badge-label">☀️ {{t:hero.solarBadge}}</span> <span id="pbSolarBadgeValue">3,2 kW</span></span>
+									<span class="hero-energy-badge consumption"><span class="badge-label">⚡ {{t:hero.consumptionBadge}}</span> <span id="pbConsumptionBadgeValue">2,8 kW</span></span>
 									<span id="pbEvBadge" class="hero-energy-badge ev" style="display:none;"><span class="badge-label"><span class="pb-ev-car-icon" aria-hidden="true"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span><span>Wattpilot:</span></span> <span id="pbEvBadgeValue">0,0 kW</span></span>
-									<span id="pbBatteryBadge" class="hero-energy-badge battery battery-idle"><span class="badge-label"><span id="pbBatteryLinkMobile" class="pb-battery-emoji" aria-hidden="true">🔋</span><span>Batteri:</span></span> <span id="pbBatteryBadgeSoc">100%</span> <span id="pbBatteryBadgeFlow" class="flow-note">Standby</span></span>
+									<span id="pbBatteryBadge" class="hero-energy-badge battery battery-idle"><span class="badge-label"><span id="pbBatteryLinkMobile" class="pb-battery-emoji" aria-hidden="true">🔋</span><span>{{t:hero.batteryBadge}}</span></span> <span id="pbBatteryBadgeSoc">100%</span> <span id="pbBatteryBadgeFlow" class="flow-note">{{t:hero.standby}}</span></span>
 								</div>
 							</div>
 						</div>
@@ -165,18 +173,18 @@
 					<div class="hero-pane-energy">
 						<div id="pbNetStat" class="hero-energy-stat net net-export">
 							<div id="pbNetIcon" class="hero-energy-stat-icon">🔌</div>
-							<div class="hero-energy-stat-label">Net</div>
+							<div class="hero-energy-stat-label">{{t:hero.net}}</div>
 							<div id="pbNetValue" class="hero-energy-stat-value">&#x2191; 293 W</div>
-							<div id="pbNetMeta" class="hero-energy-stat-meta">S&#xE6;lger</div>
+							<div id="pbNetMeta" class="hero-energy-stat-meta">{{t:hero.selling}}</div>
 						</div>
 						<div class="hero-energy-stat solar">
 							<div class="hero-energy-stat-icon">☀️</div>
-							<div class="hero-energy-stat-label">Solceller</div>
+							<div class="hero-energy-stat-label">{{t:hero.solar}}</div>
 							<div id="pbSolarValue" class="hero-energy-stat-value">3,2 kW</div>
 						</div>
 						<div class="hero-energy-stat consumption">
 							<div class="hero-energy-stat-icon">🏠</div>
-							<div class="hero-energy-stat-label">Forbrug</div>
+							<div class="hero-energy-stat-label">{{t:hero.consumption}}</div>
 							<div id="pbConsumptionValue" class="hero-energy-stat-value">2,8 kW</div>
 							<div id="pbEvInline" class="hero-energy-stat-ev-inline" style="display:none;">
 								<span class="hero-energy-stat-ev-icon" aria-hidden="true"><span class="pb-ev-car-icon"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M 20 55 L 25 45 L 35 40 L 65 40 L 75 45 L 80 55 L 80 70 L 75 75 L 25 75 L 20 70 Z" fill="#4caf50" stroke="#2e7d32" stroke-width="2"></path><path d="M 35 40 L 40 35 L 60 35 L 65 40" fill="#81c784" stroke="#2e7d32" stroke-width="1.5"></path><rect x="30" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><rect x="55" y="45" width="15" height="8" rx="2" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1"></rect><circle cx="30" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="70" cy="75" r="8" fill="#212121" stroke="#424242" stroke-width="2"></circle><circle cx="30" cy="75" r="4" fill="#616161"></circle><circle cx="70" cy="75" r="4" fill="#616161"></circle><path d="M 50 25 L 45 35 L 50 35 L 47 45 L 55 35 L 50 35 Z" fill="#ffeb3b" stroke="#f9a825" stroke-width="1.5" opacity="0.9"></path></svg></span></span>
@@ -185,29 +193,29 @@
 						</div>
 						<div id="pbBatteryStat" class="hero-energy-stat battery battery-idle" data-battery-link="local">
 							<div class="hero-energy-stat-icon"><span id="pbBatteryLinkDesktop" class="pb-battery-emoji" aria-hidden="true">🔋</span></div>
-							<div class="hero-energy-stat-label">Batteri</div>
+							<div class="hero-energy-stat-label">{{t:hero.battery}}</div>
 							<div id="pbBatteryValue" class="hero-energy-stat-value">100%</div>
-							<div id="pbBatteryMeta" class="hero-energy-stat-meta">Standby</div>
+							<div id="pbBatteryMeta" class="hero-energy-stat-meta">{{t:hero.standby}}</div>
 						</div>
 					</div>
 				</div>
 			</div>
 
 		<div class="chart-container has-chart-ribbon show-24 is-paused" id="priceChart" data-overview-mode="0" data-is-paused="1" data-current-action="hold" data-current-category="medium" data-current-price="1.0922">
-			<div class="hero-action-ribbon chart-action-ribbon hold" data-action="hold" data-action-label="Hold" title="PowerBuddy handling i nuværende time">
-				<span>Hold</span>
+			<div class="hero-action-ribbon chart-action-ribbon hold" data-action="hold" data-action-label="{{t:action.hold}}" title="{{t:chart.currentActionTitle}}">
+				<span>{{t:action.hold}}</span>
 			</div>
 			<div class="chart-top no-chart-title">
-				<div class="range-toggle" role="group" aria-label="Vælg periode">
-					<button type="button" class="range-btn active" data-range="12">12t</button>
-					<button type="button" class="range-btn" data-range="32">I dag+I morgen</button>
+				<div class="range-toggle" role="group" aria-label="{{t:chart.rangeAria}}">
+					<button type="button" class="range-btn active" data-range="12">12{{t:chart.hoursSuffix}}</button>
+					<button type="button" class="range-btn" data-range="32">{{t:chart.rangeLong}}</button>
 				</div>
 				<div class="chart-top-actions">
-					<button type="button" id="pbChartRunToggle" class="pb-chart-control-btn" data-command="start" title="Start PowerBuddy" aria-label="Start PowerBuddy" style=visibility:hidden;pointer-events:none;>
+					<button type="button" id="pbChartRunToggle" class="pb-chart-control-btn" data-command="start" title="{{t:chart.start}}" aria-label="{{t:chart.start}}" style=visibility:hidden;pointer-events:none;>
 						<span class="pb-icon" aria-hidden="true">
 							<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
 						</span>
-						<span>Pause</span>
+						<span>{{t:chart.pause}}</span>
 					</button>
 				</div>
 			</div>
@@ -215,11 +223,11 @@
 				<div class="pb-chart-paused-icon" aria-hidden="true">
 					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
 				</div>
-				<div class="pb-chart-paused-title">PowerBuddy er pauset</div>
-				<div class="pb-chart-paused-copy">Start for at vise plan- og pristabel.</div>
-				<button type="button" id="pbChartStartBtn" class="pb-chart-start-btn" data-command="start" title="Start PowerBuddy" aria-label="Start PowerBuddy">
+				<div class="pb-chart-paused-title">{{t:chart.pausedTitle}}</div>
+				<div class="pb-chart-paused-copy">{{t:chart.pausedCopy}}</div>
+				<button type="button" id="pbChartStartBtn" class="pb-chart-start-btn" data-command="start" title="{{t:chart.start}}" aria-label="{{t:chart.start}}">
 					<span class="pb-icon" aria-hidden="true"><svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M5 3.5L12 8L5 12.5V3.5Z"></path></svg></span>
-					<span>Start PowerBuddy</span>
+					<span>{{t:chart.start}}</span>
 				</button>
 			</div>
 			<div id="pbChartDataArea">
@@ -299,7 +307,7 @@
 							<div class="hour-label">23<span class="hour-zero">:00</span></div>
 						</div>
 						<div class="bar-wrapper tomorrow day-boundary is-action-editable" data-day="tomorrow" data-index="8" data-category="high" data-price="131.8550" data-action="hold" data-action-id="974" data-start-time="2026-05-20T00.00.00" data-hour-label="00.00">
-								<span class="day-boundary-badge">I MORGEN</span>
+								<span class="day-boundary-badge">{{t:chart.tomorrow}}</span>
 							<div class="bar high" style="height: 59.8%;" aria-label="00.00 - 1,32 kr">
 								<span class="bar-value">1,32</span>
 							</div>
@@ -330,7 +338,7 @@
 							<div class="bar high" style="height: 50.6%;" aria-label="03.00 - 1,20 kr">
 								<span class="bar-value">1,20</span>
 							</div>
-								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+								<span class="bar-action-icon charge" title="PowerBuddy: Oplad" aria-hidden="true">
 										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
 								</span>
 							<div class="hour-label">03<span class="hour-zero">:00</span></div>
@@ -339,7 +347,7 @@
 							<div class="bar medium" style="height: 49.6%;" aria-label="04.00 - 1,18 kr">
 								<span class="bar-value">1,18</span>
 							</div>
-								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+								<span class="bar-action-icon charge" title="PowerBuddy: Oplad" aria-hidden="true">
 										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
 								</span>
 							<div class="hour-label">04<span class="hour-zero">:00</span></div>
@@ -420,7 +428,7 @@
 							<div class="bar low" style="height: 10.0%;" aria-label="13.00 - 0,58 kr">
 								<span class="bar-value">0,58</span>
 							</div>
-								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+								<span class="bar-action-icon charge" title="PowerBuddy: Oplad" aria-hidden="true">
 										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
 								</span>
 							<div class="hour-label">13<span class="hour-zero">:00</span></div>
@@ -430,7 +438,7 @@
 									<span class="bar-flag low">Billigste</span>
 								<span class="bar-value">0,52</span>
 							</div>
-								<span class="bar-action-icon charge" title="PowerBuddy: Charge" aria-hidden="true">
+								<span class="bar-action-icon charge" title="PowerBuddy: Oplad" aria-hidden="true">
 										<svg viewBox="0 0 16 16"><path d="M8 13V3"/><path d="M4.5 6.5L8 3l3.5 3.5"/></svg>
 								</span>
 							<div class="hour-label">14<span class="hour-zero">:00</span></div>
@@ -526,36 +534,55 @@
 	<div id="pbActionModal" class="pb-action-modal" aria-hidden="true">
 		<div class="pb-action-modal-card" role="dialog" aria-modal="true" aria-labelledby="pbActionModalTitle">
 			<div class="pb-action-modal-head">
-				<div id="pbActionModalTitle" class="pb-action-modal-title">Rediger PowerBuddy handling</div>
-				<button id="pbActionModalClose" type="button" class="pb-action-modal-close" aria-label="Luk">&times;</button>
+				<div id="pbActionModalTitle" class="pb-action-modal-title">{{t:action.modalTitle}}</div>
+				<button id="pbActionModalClose" type="button" class="pb-action-modal-close" aria-label="{{t:common.close}}">&times;</button>
 			</div>
 			<div class="pb-action-modal-body">
 				<div class="pb-action-badges">
-					<div id="pbActionSlot" class="pb-action-slot">Tidspunkt: -</div>
-					<span id="pbCurrentActionChip" class="pb-current-action-chip auto">Auto</span>
+					<div id="pbActionSlot" class="pb-action-slot">{{t:action.slot}}</div>
+					<span id="pbCurrentActionChip" class="pb-current-action-chip auto">{{t:action.auto}}</span>
 				</div>
 				<div id="pbActionModalStatus" class="pb-action-status"></div>
 
 				<div id="pbActionLoginPanel">
 					<form id="pbActionLoginForm" class="pb-login-form">
-						<input id="pbActionLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="Adgangskode" required />
-						<button id="pbActionLoginSubmit" type="submit" class="pb-login-submit">Login</button>
+						<input id="pbActionLoginPassword" class="pb-login-input" type="password" name="txtLogin" autocomplete="current-password" placeholder="{{t:login.password}}" required />
+						<button id="pbActionLoginSubmit" type="submit" class="pb-login-submit">{{t:login.submit}}</button>
 					</form>
 				</div>
 
 				<div id="pbActionEditorPanel" style="display:none;">
-					<div class="pb-action-choices" role="radiogroup" aria-label="Vælg handling">
-						<button type="button" class="pb-action-choice" data-action="auto"><span class="pb-action-choice-icon"><svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg></span><span>Auto</span></button>
-						<button type="button" class="pb-action-choice" data-action="charge"><span class="pb-action-choice-icon">↑</span><span>Charge</span></button>
-						<button type="button" class="pb-action-choice" data-action="hold"><span class="pb-action-choice-icon">⏸</span><span>Hold</span></button>
-						<button type="button" class="pb-action-choice" data-action="discharge"><span class="pb-action-choice-icon">↓</span><span>Discharge</span></button>
+					<div class="pb-action-duration-section">
+						<div class="pb-action-duration-label">{{t:duration.label}}</div>
+						<div id="pbActionDurations" class="pb-action-durations" role="radiogroup" aria-label="{{t:duration.aria}}">
+							<button type="button" class="pb-action-duration" data-duration="full" aria-checked="true">{{t:duration.full}}</button>
+							<button type="button" class="pb-action-duration" data-duration="split" aria-checked="false">{{t:duration.split}}</button>
+						</div>
+						<div class="pb-action-duration-help">{{t:duration.help}}</div>
 					</div>
+					<div id="pbActionPrimaryLabel" class="pb-action-duration-label">{{t:action.forFull}}</div>
+					<div id="pbActionChoices" class="pb-action-choices" role="radiogroup" aria-label="{{t:action.chooseAria}}">
+						<button type="button" class="pb-action-choice" data-action="auto"><span class="pb-action-choice-icon"><svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg></span><span>{{t:action.auto}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="charge"><span class="pb-action-choice-icon">↑</span><span>{{t:action.charge}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="hold"><span class="pb-action-choice-icon">⏸</span><span>{{t:action.hold}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="discharge"><span class="pb-action-choice-icon">↓</span><span>{{t:action.discharge}}</span></button>
+					</div>
+					<div id="pbActionOtherSection" hidden>
+					<div id="pbActionOtherLabel" class="pb-action-duration-label">{{t:action.forSecondHalf}}</div>
+					<div id="pbActionOtherChoices" class="pb-action-choices" role="radiogroup" aria-label="{{t:action.otherChooseAria}}">
+						<button type="button" class="pb-action-choice" data-action="auto"><span class="pb-action-choice-icon"><svg viewBox="0 0 16 16"><path d="M12.8 5.2A5 5 0 0 0 4.2 3.8"/><path d="M4.1 1.8V4h2.2"/><path d="M3.2 10.8A5 5 0 0 0 11.8 12.2"/><path d="M11.9 14.2V12h-2.2"/></svg></span><span>{{t:action.auto}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="charge"><span class="pb-action-choice-icon">↑</span><span>{{t:action.charge}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="hold"><span class="pb-action-choice-icon">⏸</span><span>{{t:action.hold}}</span></button>
+						<button type="button" class="pb-action-choice" data-action="discharge"><span class="pb-action-choice-icon">↓</span><span>{{t:action.discharge}}</span></button>
+					</div>
+					</div>
+					<button id="pbActionSave" type="button" class="pb-action-save" hidden>{{t:action.save}}</button>
 					<div id="pbActionRiskConfirm" class="pb-discharge-confirm" hidden aria-live="assertive">
-						<div id="pbActionRiskTitle" class="pb-discharge-confirm-title">Bekræft handling</div>
-						<div id="pbActionRiskText" class="pb-discharge-confirm-text">Er du sikker på, at du vil fortsætte med denne handling?</div>
+						<div id="pbActionRiskTitle" class="pb-discharge-confirm-title">{{t:confirm.title}}</div>
+						<div id="pbActionRiskText" class="pb-discharge-confirm-text">{{t:confirm.text}}</div>
 						<div class="pb-discharge-confirm-actions">
-							<button id="pbActionRiskCancel" type="button" class="pb-discharge-confirm-btn cancel">Annuller</button>
-							<button id="pbActionRiskContinue" type="button" class="pb-discharge-confirm-btn continue">Ja, bekræft</button>
+							<button id="pbActionRiskCancel" type="button" class="pb-discharge-confirm-btn cancel">{{t:common.cancel}}</button>
+							<button id="pbActionRiskContinue" type="button" class="pb-discharge-confirm-btn continue">{{t:common.confirmYes}}</button>
 						</div>
 					</div>
 				</div>
@@ -566,10 +593,10 @@
 		<div class="pb-action-modal-card pb-control-confirm-card" role="dialog" aria-modal="true" aria-labelledby="pbControlConfirmTitle">
 			<div class="pb-action-modal-head pb-control-confirm-head">
 				<div class="pb-control-confirm-title-wrap">
-					<div class="pb-control-confirm-kicker">PowerBuddy styring</div>
-					<div id="pbControlConfirmTitle" class="pb-action-modal-title">Bekræft pause</div>
+					<div class="pb-control-confirm-kicker">{{t:control.title}}</div>
+					<div id="pbControlConfirmTitle" class="pb-action-modal-title">{{t:control.confirmPause}}</div>
 				</div>
-				<button id="pbControlConfirmClose" type="button" class="pb-action-modal-close" aria-label="Luk">&times;</button>
+				<button id="pbControlConfirmClose" type="button" class="pb-action-modal-close" aria-label="{{t:common.close}}">&times;</button>
 			</div>
 			<div class="pb-action-modal-body pb-control-confirm-body">
 				<div class="pb-control-confirm-hero">
@@ -577,23 +604,21 @@
 						<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></svg>
 					</div>
 					<div class="pb-control-confirm-copy">
-						<div id="pbControlConfirmText" class="pb-control-confirm-text">Er du sikker på, at du vil fortsætte?</div>
+						<div id="pbControlConfirmText" class="pb-control-confirm-text">{{t:control.defaultText}}</div>
 					</div>
 				</div>
 				<div class="pb-action-badges pb-control-confirm-badges">
-					<div id="pbControlConfirmCategory" class="pb-action-slot">Aktuel time</div>
-					<span id="pbControlConfirmAction" class="pb-current-action-chip auto">Auto</span>
+					<div id="pbControlConfirmCategory" class="pb-action-slot">{{t:control.currentHour}}</div>
+					<span id="pbControlConfirmAction" class="pb-current-action-chip auto">{{t:action.auto}}</span>
 					<span id="pbControlConfirmPrice" class="pb-control-confirm-price" hidden></span>
 				</div>
 				<div class="pb-control-confirm-actions">
-					<button id="pbControlConfirmCancel" type="button" class="pb-discharge-confirm-btn cancel">Annuller</button>
-					<button id="pbControlConfirmContinue" type="button" class="pb-control-confirm-btn continue">Ja, pause PowerBuddy</button>
+					<button id="pbControlConfirmCancel" type="button" class="pb-discharge-confirm-btn cancel">{{t:common.cancel}}</button>
+					<button id="pbControlConfirmContinue" type="button" class="pb-control-confirm-btn continue">{{t:control.yesPause}}</button>
 				</div>
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260921d"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260921s"></script>
 </body>
 </html>
-
-

@@ -100,6 +100,8 @@ class TariffManualHoursIn(BaseModel):
 
 class PlanActionUpdateIn(BaseModel):
     action: Literal["auto", "charge", "discharge", "hold", "discharge_force"] | None = None
+    duration: Literal["full", "first_half", "second_half"] = "full"
+    other_action: Literal["auto", "charge", "discharge", "hold"] | None = None
     charge_power_w: float | None = Field(default=None, ge=0)
     target_soc: float | None = None
     reason: str | None = None

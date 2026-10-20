@@ -540,6 +540,24 @@ class PlanRepository:
             return action
 
     @staticmethod
+    def rebuild_hour(day_key: str, slot_start: datetime, new_rows: list[PlanAction]) -> list[PlanAction]:
+        slot_end = slot_start + timedelta(hours=1)
+        with SessionLocal() as session:
+            session.execute(
+                delete(PlanAction).where(
+                    PlanAction.date_key == day_key,
+                    PlanAction.start_time < slot_end,
+                    PlanAction.end_time > slot_start,
+                )
+            )
+            for row in new_rows:
+                session.add(row)
+            session.commit()
+            for row in new_rows:
+                session.refresh(row)
+            return new_rows
+
+    @staticmethod
     def delete_action(action_id: int) -> bool:
         with SessionLocal() as session:
             action = session.get(PlanAction, action_id)

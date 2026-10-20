@@ -220,6 +220,12 @@ Notes:
 - The battery overview link on the dashboard is only clickable for logged-in dashboard sessions.
 - `.env.example` documents the main runtime knobs; omitted keys continue to use code defaults from `src/powerbuddy/config.py`.
 
+Dashboard language:
+
+- `POWERBUDDY_UI_LANGUAGE`: dashboard UI language, `DK` (default), `EN` or `DE`. Unknown values fall back to Danish.
+- All UI labels live in `src/powerbuddy/locales/<code>.json` (`da.json` is the master and fallback for missing keys).
+- To add a language: copy `da.json` to `<code>.json`, translate the values (keep keys and `{placeholders}`), and add the env value to `_LANGUAGE_ALIASES` in `src/powerbuddy/i18n.py`. `tests/test_i18n.py` checks that all languages share the same keys.
+
 Fronius Wattpilot Flex Pro integration (optional):
 
 - `POWERBUDDY_WATTPILOT_ENABLED`: enable Wattpilot status polling (`true`/`false`).
@@ -247,6 +253,7 @@ Battery power limits:
 
 - Base value: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH`.
 - Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.
+- In the non-summer season, the planner guarantees the four globally cheapest charge slots plus two additional cheap slots in the overnight window (00:00-05:00 by default). Additional safety or reserve charge slots may still be added when SOC and consumption require them.
 - Lookback window: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
 - Minimum sample requirement per day: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
 - Seasonal anchoring: when `POWERBUDDY_SEASONAL_ANCHOR_ENABLED=true`, the dynamic value is blended with a monthly reference (`POWERBUDDY_SEASONAL_ANCHOR_MONTHLY_DAILY_KWH_JSON`).

@@ -636,7 +636,12 @@ class DayPlanner:
             )
             soc = next_soc
 
-        def _rebuild_actions_with_forced_charge(forced_indices: set[int], reason_prefix: str) -> list[PlanAction] | None:
+        def _rebuild_actions_with_forced_charge(
+            forced_indices: set[int],
+            reason_prefix: str,
+            *,
+            allow_saturated_charge: bool = False,
+        ) -> list[PlanAction] | None:
             rebuilt: list[PlanAction] = []
             soc_local = start_soc
             for idx, point in enumerate(points):
@@ -647,7 +652,7 @@ class DayPlanner:
                     scenario_base[idx],
                     duration_hours=hour_durations[idx],
                 )
-                if action_name == "charge" and abs(delta_battery_kwh) < eps:
+                if action_name == "charge" and abs(delta_battery_kwh) < eps and not allow_saturated_charge:
                     return None
                 next_soc_local = self._next_soc(soc_local, delta_battery_kwh)
 
@@ -1420,6 +1425,46 @@ class DayPlanner:
                     action.charge_power_w = None
                     action.target_soc = None
                     action.reason = "post-dp: hold after charge removed"
+
+        # In the non-summer season, guarantee four global low-price charge slots
+        # plus additional overnight charging before the following day's expensive
+        # hours. The overnight slots are additive, not replacements.
+        if not is_summer_period and total_cost_levels:
+            cheap_charge_count = max(0, min(len(actions), int(settings.winter_cheap_charge_hours)))
+            if cheap_charge_count:
+                night_start = int(settings.winter_cheap_charge_night_start_hour) % 24
+                night_end = int(settings.winter_cheap_charge_night_end_hour) % 24
+                additional_night_count = max(
+                    0,
+                    int(settings.winter_additional_night_charge_hours),
+                )
+
+                def _is_cheap_charge_night(idx: int) -> bool:
+                    hour = self._local_hour(points[idx].timestamp)
+                    if night_start < night_end:
+                        return night_start <= hour < night_end
+                    return hour >= night_start or hour < night_end
+
+                ranked_indices = sorted(range(len(actions)), key=lambda idx: total_cost_levels[idx])
+                selected_indices = ranked_indices[:cheap_charge_count]
+                night_candidates = [
+                    idx
+                    for idx in ranked_indices
+                    if _is_cheap_charge_night(idx) and idx not in selected_indices
+                ]
+                selected_indices.extend(night_candidates[:additional_night_count])
+
+                forced_indices = {
+                    idx for idx in selected_indices if actions[idx].action != "charge"
+                }
+                if forced_indices:
+                    trial_cheap_floor = _rebuild_actions_with_forced_charge(
+                        forced_indices,
+                        "winter cheap-hour charging floor",
+                        allow_saturated_charge=True,
+                    )
+                    if trial_cheap_floor is not None:
+                        actions = trial_cheap_floor
 
         return actions
 

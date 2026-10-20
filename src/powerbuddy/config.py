@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     db_path: str = Field(default="./data/powerbuddy.db", alias="POWERBUDDY_DB_PATH")
     timezone: str = Field(default="Europe/Copenhagen", alias="POWERBUDDY_TIMEZONE")
+    # UI language: DK (default), EN or DE. More languages = add src/powerbuddy/locales/<code>.json.
+    ui_language: str = Field(default="DK", alias="POWERBUDDY_UI_LANGUAGE")
 
     price_provider: str = Field(default="energidataservice", alias="POWERBUDDY_PRICE_PROVIDER")
     price_area: str = Field(default="DK2", alias="POWERBUDDY_PRICE_AREA")
@@ -303,6 +305,22 @@ class Settings(BaseSettings):
     must_charge_window_min_soc_percent: float = Field(
         default=55.0,
         alias="POWERBUDDY_MUST_CHARGE_WINDOW_MIN_SOC_PERCENT",
+    )
+    winter_cheap_charge_hours: int = Field(
+        default=4,
+        alias="POWERBUDDY_WINTER_CHEAP_CHARGE_HOURS",
+    )
+    winter_cheap_charge_night_start_hour: int = Field(
+        default=0,
+        alias="POWERBUDDY_WINTER_CHEAP_CHARGE_NIGHT_START_HOUR",
+    )
+    winter_cheap_charge_night_end_hour: int = Field(
+        default=5,
+        alias="POWERBUDDY_WINTER_CHEAP_CHARGE_NIGHT_END_HOUR",
+    )
+    winter_additional_night_charge_hours: int = Field(
+        default=2,
+        alias="POWERBUDDY_WINTER_ADDITIONAL_NIGHT_CHARGE_HOURS",
     )
 
     # Prevent unusable plan states near battery minimum by forcing charging.
