@@ -1042,7 +1042,7 @@
 
 			function updateActionSaveVisibility() {
 				if (!saveActionButton) return;
-				saveActionButton.hidden = !hasActionChanges();
+				saveActionButton.hidden = activeDuration === 'full' || !hasActionChanges();
 			}
 
 			function halfRange(half) {
@@ -1305,8 +1305,14 @@
 			}
 
 			choiceButtons.forEach((btn) => {
-				btn.addEventListener('click', () => {
+				btn.addEventListener('click', async () => {
+					const previousAction = activeAction;
 					setSelectedAction((btn.getAttribute('data-action') || 'auto').toLowerCase());
+					if (activeDuration !== 'full' || !hasActionChanges()) return;
+					await saveActionSelection(activeAction);
+					if (modal.classList.contains('open') && !isSaving) {
+						setSelectedAction(previousAction);
+					}
 				});
 			});
 
