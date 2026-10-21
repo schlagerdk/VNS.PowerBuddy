@@ -452,8 +452,8 @@ def _dashboard_apply_plan_state(
         action_map[hour_key] = {
             "first": first_action,
             "second": second_action,
-            "manual_first": first_rec.manual and first_action != "auto",
-            "manual_second": second_rec.manual and second_action != "auto",
+            "manual_first": first_action != "auto",
+            "manual_second": second_action != "auto",
             "id": str(id_row.id),
             "duration": duration_name,
         }
