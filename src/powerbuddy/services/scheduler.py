@@ -307,8 +307,8 @@ class PowerBuddyScheduler:
 
     def _convert_active_charge_block_to_hold(self, day_key: str, now_local: datetime) -> int:
         """
-        Convert the active charge hour and directly following contiguous charge hours
-        into hold actions for the same day.
+        Convert the currently active charge period (hour or half hour) into hold.
+        Later charge points are evaluated when they become active.
         """
         actions = PlanRepository.get_plan(day_key)
         if not actions:
@@ -328,37 +328,17 @@ class PowerBuddyScheduler:
             return 0
 
         converted = 0
-        current_slot = self._naive_ts(actions[active_index].start_time).replace(minute=0, second=0, microsecond=0)
-
-        while True:
-            slot_end = current_slot + timedelta(hours=1)
-            slot_actions = [
-                a for a in actions
-                if current_slot <= self._naive_ts(a.start_time) < slot_end
-            ]
-            if not slot_actions:
-                break
-
-            # Actions are already sorted with manual overrides first. Mirror API-effective action per hour.
-            effective_action = slot_actions[0].action
-            if effective_action != "charge":
-                break
-
-            for action in slot_actions:
-                if action.action != "charge" or action.is_manual_override:
-                    continue
-                updated = PlanRepository.update_action(
-                    action.id,
-                    action="hold",
-                    charge_power_w=None,
-                    target_soc=None,
-                    reason="battery full: converted charge block to hold",
-                )
-                if updated is not None:
-                    converted += 1
-
-            current_slot = slot_end
-
+        active_action = actions[active_index]
+        # The active period (full hour or half hour) always becomes hold, also when set manually.
+        updated_active = PlanRepository.update_action(
+            active_action.id,
+            action="hold",
+            charge_power_w=None,
+            target_soc=None,
+            reason="battery full: converted charge to hold",
+        )
+        if updated_active is not None:
+            converted += 1
         return converted
 
     def _window_expected_consumption_kwh(self, start: datetime, end: datetime) -> float:

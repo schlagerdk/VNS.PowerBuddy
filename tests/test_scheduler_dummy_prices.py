@@ -112,7 +112,7 @@ def test_should_fetch_day_timing():
     assert scheduler._should_fetch_day(day_after, now_after_13, []) is False
 
 
-def test_full_battery_conversion_preserves_manual_charge_override(monkeypatch):
+def test_full_battery_conversion_converts_active_manual_charge(monkeypatch):
     now = datetime(2026, 9, 1, 14, 30)
     manual_charge = PlanAction(
         id=1,
@@ -155,17 +155,44 @@ def test_full_battery_conversion_preserves_manual_charge_override(monkeypatch):
     converted = scheduler._convert_active_charge_block_to_hold("2026-09-01", now)
 
     assert converted == 1
-    assert updates == [
-        (
-            2,
-            {
-                "action": "hold",
-                "charge_power_w": None,
-                "target_soc": None,
-                "reason": "battery full: converted charge block to hold",
-            },
-        )
-    ]
+    assert [u[0] for u in updates] == [1]
+
+
+def test_full_battery_converts_only_active_half_hour(monkeypatch):
+    now = datetime(2026, 9, 1, 11, 45)
+    first_half = PlanAction(
+        id=1,
+        date_key="2026-09-01",
+        start_time=datetime(2026, 9, 1, 11),
+        end_time=datetime(2026, 9, 1, 11, 30),
+        action="auto",
+        reason="manual override",
+        is_manual_override=True,
+    )
+    second_half = PlanAction(
+        id=2,
+        date_key="2026-09-01",
+        start_time=datetime(2026, 9, 1, 11, 30),
+        end_time=datetime(2026, 9, 1, 12),
+        action="charge",
+        reason="manual override",
+        is_manual_override=True,
+    )
+    updates = []
+    monkeypatch.setattr(
+        "powerbuddy.services.scheduler.PlanRepository.get_plan",
+        lambda day_key: [first_half, second_half],
+    )
+    monkeypatch.setattr(
+        "powerbuddy.services.scheduler.PlanRepository.update_action",
+        lambda action_id, **kwargs: updates.append((action_id, kwargs)) or second_half,
+    )
+
+    scheduler = object.__new__(PowerBuddyScheduler)
+    converted = scheduler._convert_active_charge_block_to_hold("2026-09-01", now)
+
+    assert converted == 1
+    assert [u[0] for u in updates] == [2]
 
 
 def test_clean_stale_dummy_prices_removes_morning_dummy_for_tomorrow(monkeypatch):
