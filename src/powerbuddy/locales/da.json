@@ -113,7 +113,7 @@
   "action.sessionExpired": "Session udløbet. Log ind igen.",
   "duration.label": "Varighed",
   "duration.aria": "Vælg varighed",
-  "duration.full": "Hele timen",
+  "duration.full": "Hele timer",
   "duration.firstHalf": "Første 30 min",
   "duration.secondHalf": "Sidste 30 min",
   "duration.help": "Vælg om handlingen gælder hele timen eller de to halve timer hver for sig. Ved halve timer skal du vælge handling for begge.",
@@ -197,5 +197,7 @@
   "action.otherChooseAria": "Vælg handling for den anden halve time",
   "duration.split": "Halve timer",
   "settings.language.title": "Sprog",
-  "settings.language.desc": "Skifter sproget i løsningen og gemmer det i .env"
+  "settings.language.desc": "Skifter sproget i løsningen og gemmer det i .env",
+  "range.label": "Sluttidspunkt",
+  "action.savingProgress": "Gemmer {done} af {total} timer..."
 }

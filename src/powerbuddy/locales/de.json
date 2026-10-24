@@ -113,7 +113,7 @@
   "action.sessionExpired": "Sitzung abgelaufen. Bitte erneut anmelden.",
   "duration.label": "Dauer",
   "duration.aria": "Dauer wählen",
-  "duration.full": "Ganze Stunde",
+  "duration.full": "Ganze Stunden",
   "duration.firstHalf": "Erste 30 Min.",
   "duration.secondHalf": "Letzte 30 Min.",
   "duration.help": "Wählen Sie, ob die Aktion für die ganze Stunde oder für jede halbe Stunde einzeln gilt. Bei halben Stunden wählen Sie für beide eine Aktion.",
@@ -197,5 +197,7 @@
   "action.otherChooseAria": "Aktion für die andere halbe Stunde wählen",
   "duration.split": "Halbe Stunden",
   "settings.language.title": "Sprache",
-  "settings.language.desc": "Ändert die Oberflächensprache und speichert sie in der .env"
+  "settings.language.desc": "Ändert die Oberflächensprache und speichert sie in der .env",
+  "range.label": "Endzeit",
+  "action.savingProgress": "Speichere {done} von {total} Stunden..."
 }

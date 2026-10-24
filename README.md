@@ -22,6 +22,10 @@ GitHub About (short description):
   <img src="assets/screenshots/Paused.jpg" alt="PowerBuddy paused state" width="49%" />
 </p>
 
+<p align="center">
+  <img src="assets/screenshots/Settings.jpg" alt="PowerBuddy settings and language" width="49%" />
+</p>
+
 
 Core capabilities:
 
@@ -43,10 +47,16 @@ Core capabilities:
 - Keeps existing day plans stable unless changed manually.
 - Includes a native FastAPI dashboard (`/dashboard`) for live overview, plan edits, and execution control.
 - Optional Fronius Wattpilot Flex Pro charge-state display.
+- Winter rule: the four cheapest hours always charge, plus extra cheap hours in the overnight window.
+- Half-hour planning: each hour can hold one action or two different actions (first/second half), shown with split icons in the chart.
+- Multi-hour edits: choose whole hours and an end time in the planning dialog to apply one action to several consecutive hours, with a progress spinner while saving.
+- Stripes mark every non-`auto` action (planned or manual) in the chart.
+- Full-battery protection: an active `charge` period (hour or half hour, planned or manual) becomes `hold` when the battery is full; later charge points are evaluated when they become active.
+- Dashboard language switch (🇩🇰 🇬🇧 🇩🇪) in the settings dialog, persisted to `.env` without a service restart.
 
 ## Compatibility
 
-This release (`v1.0.8`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.16`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -198,11 +208,13 @@ Selected endpoints:
 - `POST /dashboard/control`
 - `POST /dashboard/planning/action/{action_id}`
 
+`PUT /planning/action/{action_id}` accepts `duration` (`full`, `first_half`, `second_half`) and an optional `other_action` to set the opposite half of the hour to a different action.
+
 ## Runtime Configuration
 
 - `GET /config` returns the effective runtime settings loaded from `.env` at startup.
 - Runtime config is not updated through database writes or API config persistence.
-- Changes in `.env` require a service restart to take effect.
+- Changes in `.env` require a service restart to take effect (except `POWERBUDDY_UI_LANGUAGE`, which the dashboard settings dialog applies immediately).
 - `.env` is local and should not be committed.
 
 Dashboard access configuration:

@@ -402,6 +402,10 @@
 			const otherLabel = document.getElementById('pbActionOtherLabel');
 			const durationButtons = Array.from(modal.querySelectorAll('.pb-action-duration'));
 			const saveActionButton = document.getElementById('pbActionSave');
+			const busyOverlay = document.getElementById('pbActionBusy');
+			const busyText = document.getElementById('pbActionBusyText');
+			const rangeSection = document.getElementById('pbActionRangeSection');
+			const endSelect = document.getElementById('pbActionEndSelect');
 			const actionRiskConfirm = document.getElementById('pbActionRiskConfirm');
 			const actionRiskTitle = document.getElementById('pbActionRiskTitle');
 			const actionRiskText = document.getElementById('pbActionRiskText');
@@ -434,6 +438,7 @@
 			let activeSlotLabel = '';
 			let activeActionId = '';
 			let activeStartTime = '';
+			let rangeTargets = [];
 			let activeCategory = '';
 			let activePrice = null;
 			let isSaving = false;
@@ -1035,7 +1040,47 @@
 				return barFirstAction === barSecondAction && currentDuration === 'full';
 			}
 
+			function rangeExtra() {
+				return endSelect ? Number.parseInt(endSelect.value || '0', 10) || 0 : 0;
+			}
+
+			function isRangeActive() {
+				return activeDuration === 'full' && rangeExtra() > 0;
+			}
+
+			function buildRangeOptions(startTime) {
+				rangeTargets = [];
+				if (!endSelect) return;
+				endSelect.innerHTML = '';
+				const idx = actionTargets.findIndex((t) => (t.getAttribute('data-start-time') || '') === startTime);
+				if (idx < 0) {
+					if (rangeSection) rangeSection.hidden = true;
+					return;
+				}
+				const day = actionTargets[idx].getAttribute('data-day') || '';
+				const addOption = (value, label) => {
+					const opt = document.createElement('option');
+					opt.value = String(value);
+					opt.textContent = label;
+					endSelect.appendChild(opt);
+				};
+				const endLabel = (t) => {
+					const m = /T(\d{2})\./.exec(t.getAttribute('data-start-time') || '');
+					return m ? `${String((Number(m[1]) + 1) % 24).padStart(2, '0')}.00` : '';
+				};
+				addOption(0, endLabel(actionTargets[idx]));
+				for (let i = idx + 1; i < actionTargets.length; i += 1) {
+					const t = actionTargets[i];
+					if ((t.getAttribute('data-day') || '') !== day) break;
+					rangeTargets.push(t);
+					addOption(rangeTargets.length, endLabel(t));
+				}
+				endSelect.value = '0';
+				if (rangeSection) rangeSection.hidden = rangeTargets.length === 0;
+			}
+
 			function hasActionChanges() {
+				if (isRangeActive()) return true;
 				const nextSecond = activeDuration === 'split' ? activeOther : activeAction;
 				return activeAction !== barFirstAction || nextSecond !== barSecondAction;
 			}
@@ -1087,7 +1132,7 @@
 				choiceButtons.forEach((btn) => {
 					const actionName = (btn.getAttribute('data-action') || '').trim().toLowerCase();
 					const isSelected = actionName === activeAction;
-					const isCurrent = actionName === barFirstAction && (activeDuration === 'split' || barIsFull());
+					const isCurrent = actionName === barFirstAction && (activeDuration === 'split' || barIsFull()) && !isRangeActive();
 					const isUnchangedCurrent = isCurrent && isSelected;
 					btn.classList.toggle('is-selected', isSelected && !isUnchangedCurrent);
 					btn.classList.toggle('is-current', isUnchangedCurrent);
@@ -1097,8 +1142,9 @@
 					btn.setAttribute('aria-disabled', (isUnchangedCurrent || isSaving) ? 'true' : 'false');
 				});
 				durationButtons.forEach((btn) => {
-					btn.disabled = isSaving;
-					btn.setAttribute('aria-disabled', isSaving ? 'true' : 'false');
+					const blocked = isSaving || (btn.getAttribute('data-duration') === 'split' && isRangeActive());
+					btn.disabled = blocked;
+					btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
 				});
 				updateActionSaveVisibility();
 			}
@@ -1114,6 +1160,8 @@
 				if (previousDuration !== activeDuration && activeDuration === 'split') {
 					setSelectedOther(barIsFull() ? 'auto' : barSecondAction);
 				}
+				if (activeDuration === 'split' && endSelect) endSelect.value = '0';
+				if (rangeSection) rangeSection.hidden = activeDuration === 'split' || rangeTargets.length === 0;
 				renderActionLabels();
 				setSelectedAction(activeAction);
 			}
@@ -1179,6 +1227,7 @@
 				if (barFirstAction !== barSecondAction) currentDuration = 'split';
 				activeSlotLabel = actionLabel || '';
 				activeDuration = currentDuration;
+				buildRangeOptions(activeStartTime);
 				activeAction = barFirstAction;
 				activeOther = barSecondAction;
 				renderActionLabels();
@@ -1252,7 +1301,8 @@
 					return;
 				}
 				const split = activeDuration === 'split';
-				if (normalizedAction !== barFirstAction && !(await confirmActionRisks(normalizedAction))) {
+				const rangeActive = isRangeActive();
+				if ((rangeActive || normalizedAction !== barFirstAction) && !(await confirmActionRisks(normalizedAction))) {
 					return;
 				}
 				if (split && activeOther !== barSecondAction && !(await confirmActionRisks(activeOther))) {
@@ -1263,20 +1313,38 @@
 				isSaving = true;
 				if (saveActionButton) saveActionButton.disabled = true;
 				setStatus(pbT('action.saving'), false);
+				const setBusy = (on, text) => {
+					if (busyOverlay) busyOverlay.hidden = !on;
+					if (busyText && text) busyText.textContent = text;
+				};
+				const totalSlots = 1 + (rangeActive ? rangeExtra() : 0);
+				setBusy(true, totalSlots > 1 ? pbT('action.savingProgress', { done: 0, total: totalSlots }) : pbT('action.saving'));
 				let saved = false;
 				try {
-					const body = new URLSearchParams();
-					if (activeActionId) body.set('actionId', activeActionId);
-					if (activeStartTime) body.set('startTime', activeStartTime);
-					body.set('actionName', normalizedAction);
-					body.set('actionDuration', split ? 'first_half' : 'full');
-					if (split) body.set('otherAction', activeOther);
-					const res = await fetch('?action=planning-update', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-						body: body.toString()
-					});
-					const data = await res.json();
+					const postUpdate = async (actionId, startTime) => {
+						const body = new URLSearchParams();
+						if (actionId) body.set('actionId', actionId);
+						if (startTime) body.set('startTime', startTime);
+						body.set('actionName', normalizedAction);
+						body.set('actionDuration', split ? 'first_half' : 'full');
+						if (split) body.set('otherAction', activeOther);
+						const res = await fetch('?action=planning-update', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+							body: body.toString()
+						});
+						return { res, data: await res.json() };
+					};
+					let { res, data } = await postUpdate(activeActionId, activeStartTime);
+					if (rangeActive && res.ok && data && data.ok) {
+						let done = 1;
+						for (const target of rangeTargets.slice(0, rangeExtra())) {
+							setBusy(true, pbT('action.savingProgress', { done, total: totalSlots }));
+							done += 1;
+							({ res, data } = await postUpdate(target.getAttribute('data-action-id') || '', target.getAttribute('data-start-time') || ''));
+							if (!(res.ok && data && data.ok)) break;
+						}
+					}
 					if (res.ok && data && data.ok) {
 						saved = true;
 						closeModal();
@@ -1297,6 +1365,7 @@
 					setStatus(pbT('action.saveFailed', { code: '' }), true);
 				} finally {
 					isSaving = false;
+					if (!saved) setBusy(false);
 					if (saveActionButton) saveActionButton.disabled = false;
 					setSelectedAction(activeAction);
 					setSelectedOther(activeOther);
@@ -1321,6 +1390,12 @@
 					setSelectedOther((btn.getAttribute('data-action') || 'auto').toLowerCase());
 				});
 			});
+
+			if (endSelect) {
+				endSelect.addEventListener('change', () => {
+					setSelectedAction(activeAction);
+				});
+			}
 
 			durationButtons.forEach((btn) => {
 				btn.addEventListener('click', () => {

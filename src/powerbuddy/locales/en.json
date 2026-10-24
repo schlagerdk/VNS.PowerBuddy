@@ -113,7 +113,7 @@
   "action.sessionExpired": "Session expired. Please log in again.",
   "duration.label": "Duration",
   "duration.aria": "Select duration",
-  "duration.full": "Full hour",
+  "duration.full": "Whole hours",
   "duration.firstHalf": "First 30 min",
   "duration.secondHalf": "Last 30 min",
   "duration.help": "Choose whether the action covers the full hour or each half hour separately. With half hours you choose an action for both.",
@@ -197,5 +197,7 @@
   "action.otherChooseAria": "Select action for the other half hour",
   "duration.split": "Half hours",
   "settings.language.title": "Language",
-  "settings.language.desc": "Changes the interface language and saves it in .env"
+  "settings.language.desc": "Changes the interface language and saves it in .env",
+  "range.label": "End time",
+  "action.savingProgress": "Saving {done} of {total} hours..."
 }

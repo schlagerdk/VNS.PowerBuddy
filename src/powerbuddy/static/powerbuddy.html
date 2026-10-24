@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20260921u" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20261024b" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -538,6 +538,10 @@
 				<button id="pbActionModalClose" type="button" class="pb-action-modal-close" aria-label="{{t:common.close}}">&times;</button>
 			</div>
 			<div class="pb-action-modal-body">
+				<div id="pbActionBusy" class="pb-action-busy" hidden role="status" aria-live="polite">
+					<div class="pb-spinner" aria-hidden="true"></div>
+					<div id="pbActionBusyText" class="pb-action-busy-text">{{t:action.saving}}</div>
+				</div>
 				<div class="pb-action-badges">
 					<div id="pbActionSlot" class="pb-action-slot">{{t:action.slot}}</div>
 					<span id="pbCurrentActionChip" class="pb-current-action-chip auto">{{t:action.auto}}</span>
@@ -557,6 +561,10 @@
 						<div id="pbActionDurations" class="pb-action-durations" role="radiogroup" aria-label="{{t:duration.aria}}">
 							<button type="button" class="pb-action-duration" data-duration="full" aria-checked="true">{{t:duration.full}}</button>
 							<button type="button" class="pb-action-duration" data-duration="split" aria-checked="false">{{t:duration.split}}</button>
+						</div>
+						<div id="pbActionRangeSection" class="pb-action-range" hidden>
+							<label for="pbActionEndSelect" class="pb-action-duration-label">{{t:range.label}}</label>
+							<select id="pbActionEndSelect" class="pb-action-end-select"></select>
 						</div>
 						<div class="pb-action-duration-help">{{t:duration.help}}</div>
 					</div>
@@ -619,6 +627,6 @@
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20260921u"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20261024b"></script>
 </body>
 </html>
