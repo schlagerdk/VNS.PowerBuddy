@@ -125,7 +125,11 @@ class PriceRepository:
                         PricePoint.source.ilike("dummy%"),
                     )
                 )
+            # DST fall-back day has the same local hour twice; storage is keyed on wall time.
+            unique_points: dict[tuple[datetime, str], PricePoint] = {}
             for point in points:
+                unique_points.setdefault((point.timestamp.replace(tzinfo=None), point.area), point)
+            for point in unique_points.values():
                 existing = session.execute(
                     select(PricePoint).where(
                         PricePoint.timestamp == point.timestamp,

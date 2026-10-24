@@ -37,7 +37,7 @@ def test_refresh_prices_and_replan_creates_dummy_prices_after_14(monkeypatch):
 
     class DummyProvider:
         async def get_day_prices(self, day, area):
-            return []
+          return []
 
         async def get_latest_available_day(self, area):
             return datetime(2026, 9, 1).date()
@@ -52,13 +52,13 @@ def test_refresh_prices_and_replan_creates_dummy_prices_after_14(monkeypatch):
         captured["lock_hours"] = lock_hours
 
     def fake_get_by_day(day, area):
-        return []
+      return []
 
     def fake_upsert_prices(points):
         captured["upserted"] = points
 
     def fake_get_plan(day_key):
-        return []
+      return []
 
     monkeypatch.setattr("powerbuddy.services.scheduler.get_price_provider", lambda: DummyProvider())
     monkeypatch.setattr("powerbuddy.services.scheduler.PriceRepository.get_by_day", fake_get_by_day)
@@ -254,3 +254,26 @@ def test_clean_stale_dummy_prices_removes_morning_dummy_for_tomorrow(monkeypatch
         remaining = list(session.execute(sqlalchemy.select(PricePoint)).scalars())
         assert len(remaining) == 24
         assert all(p.timestamp.date() == today for p in remaining)
+
+
+def test_upsert_prices_handles_dst_duplicate_hour(monkeypatch):
+    engine = sqlalchemy.create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr("powerbuddy.repositories.SessionLocal", sessionmaker(bind=engine, future=True, autoflush=False))
+
+    def make_points():
+        return [
+            PricePoint(timestamp=datetime.fromisoformat(ts), area="DK2", price_ore_per_kwh=100.0, currency="DKK", source="elprisenligenu")
+            for ts in (
+                "2026-10-25T01:00:00+02:00",
+                "2026-10-25T02:00:00+02:00",
+                "2026-10-25T02:00:00+01:00",
+                "2026-10-25T03:00:00+01:00",
+            )
+        ]
+
+    PriceRepository.upsert_prices(make_points())
+    PriceRepository.upsert_prices(make_points())
+
+    with sessionmaker(bind=engine, future=True)() as session:
+        assert session.query(PricePoint).count() == 3
