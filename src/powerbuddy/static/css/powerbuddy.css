@@ -643,6 +643,11 @@
 			color: #e2e8f0;
 			font-size: 12px;
 			line-height: 1.45;
+			transition: opacity 0.3s ease;
+		}
+
+		.pb-settings-status.is-hiding {
+			opacity: 0;
 		}
 
 		.pb-settings-status:empty {

@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 UPDATE_REPO = os.environ.get("POWERBUDDY_UPDATE_REPO", "schlagerdk/VNS.PowerBuddy")
 SERVICE_NAME = os.environ.get("POWERBUDDY_SERVICE_NAME", "powerbuddy.service")
-CHECK_INTERVAL_SECONDS = 3600
+CHECK_INTERVAL_SECONDS = 600
+FORCE_MIN_INTERVAL_SECONDS = 60
 
 _cache: dict[str, object] = {"checked_at": 0.0, "latest": None, "url": None, "error": None}
 
@@ -55,7 +56,9 @@ def read_update_state() -> str:
 
 async def check_for_update(force: bool = False) -> dict[str, object]:
     now = time.time()
-    if force or now - float(_cache["checked_at"] or 0.0) > CHECK_INTERVAL_SECONDS:
+    age = now - float(_cache["checked_at"] or 0.0)
+    # Forced checks are throttled to stay well inside GitHub's anonymous rate limit.
+    if age > (FORCE_MIN_INTERVAL_SECONDS if force else CHECK_INTERVAL_SECONDS):
         try:
             async with httpx.AsyncClient(timeout=10, headers={"Accept": "application/vnd.github+json"}) as client:
                 response = await client.get(f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")

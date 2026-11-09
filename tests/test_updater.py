@@ -42,3 +42,27 @@ def test_dashboard_renders_running_version():
     html = render_dashboard_html(title="PB", icon_url="/i.png", favicon_url="/f.ico", apple_touch_icon_url="/a.png")
     assert "{{version}}" not in html
     assert f'data-version="{__version__}"' in html
+
+
+def test_forced_check_refreshes_after_short_throttle(monkeypatch):
+    calls = []
+    real_client = updater.httpx.AsyncClient
+
+    def handle(request):
+        calls.append(request.url.path)
+        return updater.httpx.Response(200, json={"tag_name": "v99.0.0", "html_url": "u"})
+
+    monkeypatch.setattr(updater.httpx, "AsyncClient", lambda **kwargs: real_client(
+        **kwargs, transport=updater.httpx.MockTransport(handle)
+    ))
+    clock = {"now": 10_000.0}
+    monkeypatch.setattr(updater.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(updater, "_cache", {"checked_at": 10_000.0 - 120, "latest": "0.0.1", "url": None, "error": None})
+
+    assert asyncio.run(updater.check_for_update())["latest"] == "0.0.1"
+    assert calls == []
+    assert asyncio.run(updater.check_for_update(force=True))["latest"] == "99.0.0"
+    assert len(calls) == 1
+    clock["now"] += 30
+    asyncio.run(updater.check_for_update(force=True))
+    assert len(calls) == 1

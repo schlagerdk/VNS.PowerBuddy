@@ -1556,6 +1556,28 @@
 			const settingsModal = document.getElementById('pbSettingsModal');
 			const settingsClose = document.getElementById('pbSettingsModalClose');
 			const settingsStatus = document.getElementById('pbSettingsStatus');
+			if (settingsStatus) {
+				// Auto-hide final status messages; progress messages stay until replaced.
+				const persistentStatusKeys = ['settings.running', 'settings.runningAi', 'settings.claude.verifying'];
+				let statusHideTimer = null;
+				let statusClearing = false;
+				new MutationObserver(() => {
+					if (statusClearing) return;
+					window.clearTimeout(statusHideTimer);
+					settingsStatus.classList.remove('is-hiding');
+					const text = settingsStatus.textContent || '';
+					if (!text || persistentStatusKeys.some((key) => pbT(key) === text)) return;
+					statusHideTimer = window.setTimeout(() => {
+						settingsStatus.classList.add('is-hiding');
+						statusHideTimer = window.setTimeout(() => {
+							statusClearing = true;
+							settingsStatus.textContent = '';
+							settingsStatus.classList.remove('is-hiding');
+							statusClearing = false;
+						}, 300);
+					}, 3500);
+				}).observe(settingsStatus, { childList: true, characterData: true, subtree: true });
+			}
 			const settingsActions = Array.from(document.querySelectorAll('[data-settings-action]'));
 			const dummyPricesToggle = document.getElementById('pbDummyPricesToggle');
 			const languageFlags = Array.from(document.querySelectorAll('.pb-language-flag'));
@@ -1675,7 +1697,7 @@
 
 			function openMenuPanel() {
 				if (!menuPanel || !isAuthorized) return;
-				checkForUpdate(false);
+				checkForUpdate(true);
 				menuPanel.classList.add('open');
 				menuPanel.setAttribute('aria-hidden', 'false');
 				if (menuButton) {
