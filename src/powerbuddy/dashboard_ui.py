@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 
+from powerbuddy import __version__
 from powerbuddy.i18n import current_language, get_catalog
 
 
@@ -72,6 +73,7 @@ def render_dashboard_html(*, title: str, icon_url: str, favicon_url: str, apple_
             lambda m: escape(catalog.get(m.group(1), m.group(1))),
             html,
         )
+        html = html.replace("{{version}}", escape(__version__))
         html = html.replace('<html lang="da">', f'<html lang="{language}">', 1)
         payload = json.dumps(catalog, ensure_ascii=False).replace("</", "<\\/")
         i18n_script = f'<script>window.PB_LANG={json.dumps(language)};window.PB_I18N={payload};</script>\n\t'

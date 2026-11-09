@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20261024b" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20261109c" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -62,6 +62,10 @@
 							<button type="button" class="pb-menu-item" data-menu-action="settings">
 								<span class="pb-menu-item-label">{{t:menu.settings}}</span>
 							</button>
+							<div class="pb-menu-footer">
+								<button id="pbUpdateButton" type="button" class="pb-menu-update" hidden></button>
+								<div id="pbMenuVersion" class="pb-menu-version" data-version="{{version}}">{{t:menu.version}} {{version}}</div>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -138,6 +142,17 @@
 								<button type="button" class="pb-language-flag" data-language="EN" title="English" aria-label="English" aria-checked="false">🇬🇧</button>
 								<button type="button" class="pb-language-flag" data-language="DE" title="Deutsch" aria-label="Deutsch" aria-checked="false">🇩🇪</button>
 							</div>
+						</div>
+						<div class="pb-settings-claude">
+							<div class="pb-settings-claude-head">
+								<span><strong>{{t:settings.claude.title}}</strong><small>{{t:settings.claude.desc}}</small></span>
+								<span id="pbClaudeState" class="pb-claude-state">{{t:settings.claude.inactive}}</span>
+							</div>
+							<form id="pbClaudeForm" class="pb-claude-form" autocomplete="off">
+								<input id="pbClaudeKey" type="password" class="pb-claude-input" placeholder="{{t:settings.claude.placeholder}}" autocomplete="new-password" spellcheck="false" aria-label="{{t:settings.claude.title}}" />
+								<button id="pbClaudeSave" type="submit" class="pb-claude-btn">{{t:settings.claude.save}}</button>
+								<button id="pbClaudeRemove" type="button" class="pb-claude-btn pb-claude-btn-secondary" hidden>{{t:settings.claude.remove}}</button>
+							</form>
 						</div>
 						<div id="pbSettingsStatus" class="pb-log-status" aria-live="polite"></div>
 					</div>
@@ -597,6 +612,12 @@
 			</div>
 		</div>
 	</div>
+	<div id="pbUpdateOverlay" class="pb-update-overlay" hidden role="status" aria-live="polite">
+		<div class="pb-update-card">
+			<div class="pb-spinner" aria-hidden="true"></div>
+			<div id="pbUpdateOverlayText" class="pb-update-text"></div>
+		</div>
+	</div>
 	<div id="pbControlConfirmModal" class="pb-action-modal pb-control-confirm-modal" aria-hidden="true">
 		<div class="pb-action-modal-card pb-control-confirm-card" role="dialog" aria-modal="true" aria-labelledby="pbControlConfirmTitle">
 			<div class="pb-action-modal-head pb-control-confirm-head">
@@ -627,6 +648,6 @@
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20261024b"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20261109c"></script>
 </body>
 </html>

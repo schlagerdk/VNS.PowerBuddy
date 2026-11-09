@@ -1,6 +1,6 @@
 from typing import Final
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,11 @@ class Settings(BaseSettings):
 
     price_provider: str = Field(default="energidataservice", alias="POWERBUDDY_PRICE_PROVIDER")
     price_area: str = Field(default="DK2", alias="POWERBUDDY_PRICE_AREA")
+    claude_api_key: SecretStr = Field(default=SecretStr(""), alias="POWERBUDDY_CLAUDE_API_KEY", exclude=True)
+    claude_model: str = Field(default="claude-sonnet-4-6", alias="POWERBUDDY_CLAUDE_MODEL")
+    claude_timeout_seconds: float = Field(
+        default=45.0, gt=0, le=120, alias="POWERBUDDY_CLAUDE_TIMEOUT_SECONDS"
+    )
 
     inverter_type: str = Field(default="fronius", alias="POWERBUDDY_INVERTER_TYPE")
     # Keep default empty to satisfy static type-checkers; must be set via env in real runs.

@@ -53,10 +53,11 @@ Core capabilities:
 - Stripes mark every non-`auto` action (planned or manual) in the chart.
 - Full-battery protection: an active `charge` period (hour or half hour, planned or manual) becomes `hold` when the battery is full; later charge points are evaluated when they become active.
 - Dashboard language switch (🇩🇰 🇬🇧 🇩🇪) in the settings dialog, persisted to `.env` without a service restart.
+- Self-update: the menu always shows the running version and, when a newer GitHub release exists, an update button (`Update 1.0.16 → 1.0.17`). It installs the release tag with the service's own `pip` (via `systemd-run`) and restarts `powerbuddy.service`; output goes to `update.log` next to the database. Override with `POWERBUDDY_UPDATE_REPO` / `POWERBUDDY_SERVICE_NAME`.
 
 ## Compatibility
 
-This release (`v1.0.16`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.17`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -262,6 +263,39 @@ Battery power limits:
 - Legacy keys `POWERBUDDY_BATTERY_CAPACITY_KWH`, `POWERBUDDY_BATTERY_MIN_SOC`, `POWERBUDDY_BATTERY_MAX_SOC`, `POWERBUDDY_PLANNED_CHARGE_KW`, and `POWERBUDDY_DEFAULT_CHARGE_POWER_W` are no longer required.
 
 ## Consumption Model
+
+### Optional Claude planning proposals
+
+Set `POWERBUDDY_CLAUDE_API_KEY` in `.env` and restart the service, or paste the key
+under **Settings → AI planning (Claude)** in the dashboard, to enable Claude
+price-based proposals for scheduled replanning, dashboard plan creation and chart
+bootstrap. The dashboard verifies the key against Anthropic's model list, stores it
+in `.env` (mode 600) without a restart and never sends it back to the browser;
+**Remove** clears it again. With a key, **Create plan now** and **Fetch prices and
+create plan** always create a new plan through Claude (even when prices are unchanged),
+**Fetch prices now** re-plans the fetched days through Claude, and all three report
+for how many days the AI proposal was accepted. Leave the key empty to
+retain the existing planner unchanged.
+`POWERBUDDY_CLAUDE_MODEL` defaults to `claude-sonnet-4-6`;
+`POWERBUDDY_CLAUDE_TIMEOUT_SECONDS` defaults to 45 seconds. API calls incur costs.
+Never commit the key. It is masked in settings representations and excluded from
+settings serialization and `/config`.
+
+Only public spot-price timestamps/values and general seasonal charging rules are
+sent to Anthropic. Household consumption/history, telemetry, SOC, solar forecasts,
+manual overrides, location, tariffs and other environment settings stay local.
+No call is made for dummy/provisional prices. This is a constrained proposal
+integration, not an autonomous agent with server or inverter access.
+
+The local engine still provides the baseline and validates proposals using the
+existing consumption/solar forecasts, tariffs, battery limits and reserve rules.
+Locally scheduled charge slots (including the winter cheapest-hour floor) are
+preserved, and manual overrides continue to be applied locally. A proposal is
+rejected if its simulated cost, final reserve or expensive-hour grid purchases
+are worse. API errors, timeouts and invalid/rejected proposals produce a warning
+in the service log and use the unchanged existing planner. Accepted proposals
+are also logged. No improvement is guaranteed; local checks and existing plan
+post-processing may alter or reject the proposal.
 
 - Base value: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH`.
 - Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.

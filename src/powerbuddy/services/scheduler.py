@@ -14,6 +14,7 @@ from powerbuddy.repositories import KPIRepository, PlanRepository, PowerReposito
 from powerbuddy.services.half_hour import planned_remainders as half_hour_remainders
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
+from powerbuddy.services.claude_planner import plan_with_claude
 from powerbuddy.services.planning_sanity import apply_planning_sanity
 from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import PricePoint, get_price_provider
@@ -207,7 +208,8 @@ class PowerBuddyScheduler:
                         )
                     )
 
-        actions_future = self.planner.plan(
+        actions_future = await plan_with_claude(
+            self.planner,
             PlannerInput(
                 day=day,
                 price_points=prices,
@@ -391,18 +393,20 @@ class PowerBuddyScheduler:
     # Core jobs
     # ------------------------------------------------------------------
 
-    async def refresh_prices_and_replan(self) -> None:
+    async def refresh_prices_and_replan(self, force: bool = False) -> int:
         """
         Fetch prices for forward horizon and re-plan only when new/changed
         price data arrives for a day.
 
         Once a plan is generated for a given set of prices, it remains locked
-        until prices for that day change.
+        until prices for that day change. With ``force`` every horizon day with
+        stored prices is re-planned, even when prices are unchanged.
         """
         tz = ZoneInfo(settings.timezone)
         now = datetime.now(tz).replace(tzinfo=None)
         PriceRepository.clean_stale_dummy_prices(datetime.now(tz))
         days_to_fetch = self._horizon_days_from_now()
+        planned_days: set[date] = set()
 
         for day in days_to_fetch:
             existing_prices = PriceRepository.get_by_day(day, settings.price_area)
@@ -437,6 +441,7 @@ class PowerBuddyScheduler:
                         if prices:
                             soc = await self._resolve_start_soc_for_day(day)
                             await self._plan_and_simulate(day, prices, soc)
+                            planned_days.add(day)
                         continue
                 logger.warning(
                     "No price payload returned for %s; provider may not have published it yet for local publication hour %02d:00",
@@ -471,11 +476,26 @@ class PowerBuddyScheduler:
             logger.info("Generating daily plan for %s", day)
             soc = await self._resolve_start_soc_for_day(day)
             await self._plan_and_simulate(day, prices, soc)
+            planned_days.add(day)
 
-    async def manual_fetch_prices(self) -> int:
-        """Fetch all currently relevant days without changing existing plans."""
+        if force:
+            for day in days_to_fetch:
+                if day in planned_days:
+                    continue
+                prices = PriceRepository.get_by_day(day, settings.price_area)
+                if not prices:
+                    continue
+                logger.info("Forced re-plan for %s from stored prices", day)
+                soc = await self._resolve_start_soc_for_day(day)
+                await self._plan_and_simulate(day, prices, soc)
+                planned_days.add(day)
+        return len(planned_days)
+
+    async def manual_fetch_prices(self, replan_fetched: bool = False) -> int:
+        """Fetch all currently relevant days; optionally re-plan the days that were fetched."""
         now = datetime.now(ZoneInfo(settings.timezone))
         fetched_days = 0
+        replanned_days = 0
         for day in self._horizon_days_from_now():
             existing_prices = PriceRepository.get_by_day(day, settings.price_area)
             if not self._should_fetch_day(day, now, existing_prices):
@@ -493,7 +513,15 @@ class PowerBuddyScheduler:
             if fetched:
                 PriceRepository.upsert_prices(fetched)
                 fetched_days += 1
+                if replan_fetched:
+                    prices = PriceRepository.get_by_day(day, settings.price_area)
+                    if prices:
+                        soc = await self._resolve_start_soc_for_day(day)
+                        await self._plan_and_simulate(day, prices, soc)
+                        replanned_days += 1
         logger.info("Manual price fetch completed for %s; fetched %d day(s)", now.date(), fetched_days)
+        if replan_fetched:
+            logger.info("Manual price fetch re-planned %d day(s)", replanned_days)
         return fetched_days
 
     async def manual_generate_plan(self) -> int:

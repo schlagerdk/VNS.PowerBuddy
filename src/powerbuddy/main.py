@@ -18,12 +18,15 @@ from typing import Any, Literal, TypedDict, cast
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import SecretStr
 
+from powerbuddy import __version__
 from powerbuddy.config import set_detected_battery_capacity_kwh, settings
 from powerbuddy.dashboard_ui import render_dashboard_html
 from powerbuddy.database import init_db
@@ -49,11 +52,19 @@ from powerbuddy.schemas import (
 from powerbuddy.services import half_hour
 from powerbuddy.services.inverter import get_inverter_client
 from powerbuddy.services.planner import DayPlanner, PlannerInput
+from powerbuddy.services.claude_planner import (
+    claude_configured,
+    collect_outcomes,
+    plan_with_claude,
+    summarize_outcomes,
+    verify_api_key,
+)
 from powerbuddy.services.planning_sanity import apply_planning_sanity
 from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import get_price_provider
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
+from powerbuddy.services import updater
 from powerbuddy.services.wattpilot import get_wattpilot_status
 from powerbuddy.services.weather import weather_forecast_service
 
@@ -838,7 +849,7 @@ openapi_tags = [
 
 app = FastAPI(
     title="VNS PowerBuddy API",
-    version="1.0.16",
+    version=__version__,
     description=(
         "API for spot prices, Danish tariffs and battery planning. "
         "Designed to be consumed directly from external applications (for example Umbraco)."
@@ -1353,6 +1364,7 @@ async def dashboard_control(request: Request) -> dict[str, object]:
 
 
 _UI_LANGUAGE_CODES = ("DK", "EN", "DE")
+_CLAUDE_KEY_PATTERN = re.compile(r"sk-ant-[A-Za-z0-9_-]{20,250}")
 
 
 def _language_env_code(value: str | None) -> str:
@@ -1373,7 +1385,10 @@ def _persist_env_value(key: str, value: str) -> None:
     if not replaced:
         lines.append(f"{key}={value}")
     tmp_path = env_path.with_name(env_path.name + ".tmp")
-    tmp_path.write_bytes((newline.join(lines) + newline).encode("utf-8"))
+    # Create the temp file private from the start; .env may hold secrets.
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write((newline.join(lines) + newline).encode("utf-8"))
     if env_path.exists():
         shutil.copymode(env_path, tmp_path)
     os.replace(tmp_path, env_path)
@@ -1387,6 +1402,19 @@ async def dashboard_settings_action(request: Request) -> dict[str, object]:
 
     payload = await request.json()
     action = str(payload.get("action") or "").strip().lower()
+    if action == "update-status":
+        return {"ok": True, "action": action, **(await updater.check_for_update(force=bool(payload.get("force"))))}
+    if action == "update-install":
+        status = await updater.check_for_update()
+        target = str(payload.get("version") or "").strip().lstrip("vV")
+        if not status["update_available"] or target != status["latest"]:
+            raise HTTPException(status_code=400, detail="no_update_available")
+        try:
+            updater.start_update(target)
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not start update: %s", exc)
+            raise HTTPException(status_code=500, detail="update_start_failed") from exc
+        return {"ok": True, "action": action, "from": __version__, "to": target}
     if action == "language-status":
         return {"ok": True, "action": action, "language": _language_env_code(settings.ui_language)}
     if action == "set-language":
@@ -1422,14 +1450,56 @@ async def dashboard_settings_action(request: Request) -> dict[str, object]:
             "deleted_prices": deleted_prices,
         }
     if action == "fetch-prices":
-        count = await scheduler.manual_fetch_prices()
-        return {"ok": True, "action": action, "days": count}
+        if not claude_configured():
+            count = await scheduler.manual_fetch_prices()
+            return {"ok": True, "action": action, "days": count}
+        with collect_outcomes() as outcomes:
+            count = await scheduler.manual_fetch_prices(replan_fetched=True)
+        return {"ok": True, "action": action, "days": count, "ai": summarize_outcomes(outcomes)}
     if action == "generate-plan":
-        count = await scheduler.manual_generate_plan()
-        return {"ok": True, "action": action, "days": count}
+        with collect_outcomes() as outcomes:
+            count = await scheduler.manual_generate_plan()
+        return {"ok": True, "action": action, "days": count, "ai": summarize_outcomes(outcomes)}
     if action == "refresh-and-plan":
-        await scheduler.refresh_prices_and_replan()
-        return {"ok": True, "action": action}
+        with collect_outcomes() as outcomes:
+            count = await scheduler.refresh_prices_and_replan(force=True)
+        return {"ok": True, "action": action, "days": count, "ai": summarize_outcomes(outcomes)}
+    if action == "claude-status":
+        return {"ok": True, "action": action, "configured": claude_configured(), "model": settings.claude_model}
+    if action == "set-claude-key":
+        api_key = payload.get("api_key")
+        if not isinstance(api_key, str):
+            raise HTTPException(status_code=400, detail="api_key must be a string")
+        api_key = api_key.strip()
+        if api_key and not _CLAUDE_KEY_PATTERN.fullmatch(api_key):
+            raise HTTPException(status_code=400, detail="invalid_api_key")
+        verified: bool | None = None
+        model_available: bool | None = None
+        if api_key:
+            try:
+                check = await verify_api_key(api_key)
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("Could not verify Claude API key (%s); saving anyway", type(exc).__name__)
+            else:
+                if not check["valid"]:
+                    raise HTTPException(status_code=400, detail="invalid_api_key")
+                verified = True
+                model_available = bool(check["model_available"])
+        try:
+            _persist_env_value("POWERBUDDY_CLAUDE_API_KEY", api_key)
+        except OSError as exc:
+            logger.warning("Could not write POWERBUDDY_CLAUDE_API_KEY to .env: %s", type(exc).__name__)
+            raise HTTPException(status_code=500, detail="env_write_failed") from exc
+        settings.claude_api_key = SecretStr(api_key)
+        logger.info("Claude API key %s from dashboard settings", "saved" if api_key else "removed")
+        return {
+            "ok": True,
+            "action": action,
+            "configured": claude_configured(),
+            "model": settings.claude_model,
+            "verified": verified,
+            "model_available": model_available,
+        }
     raise HTTPException(status_code=400, detail="Invalid settings action")
 
 
@@ -1801,7 +1871,8 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
     network_tariff = await tariff_service.get_network_tariff_24h()
     tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
 
-    generated = planner.plan(
+    generated = await plan_with_claude(
+        planner,
         PlannerInput(
             day=day,
             price_points=prices,
@@ -2098,7 +2169,8 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
         # Bootstrap when no schedule exists yet.
         network_tariff_bootstrap = await tariff_service.get_network_tariff_24h()
         tariff_24h_bootstrap = tariff_service.total_tariff_ore_24h(network_tariff_bootstrap)
-        actions = planner.plan(
+        actions = await plan_with_claude(
+            planner,
             PlannerInput(
                 day=used_day,
                 price_points=prices,

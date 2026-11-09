@@ -1559,6 +1559,11 @@
 			const settingsActions = Array.from(document.querySelectorAll('[data-settings-action]'));
 			const dummyPricesToggle = document.getElementById('pbDummyPricesToggle');
 			const languageFlags = Array.from(document.querySelectorAll('.pb-language-flag'));
+			const claudeForm = document.getElementById('pbClaudeForm');
+			const claudeKeyInput = document.getElementById('pbClaudeKey');
+			const claudeSaveButton = document.getElementById('pbClaudeSave');
+			const claudeRemoveButton = document.getElementById('pbClaudeRemove');
+			const claudeState = document.getElementById('pbClaudeState');
 			const setActiveLanguageFlag = (code) => languageFlags.forEach((btn) => {
 				const active = btn.getAttribute('data-language') === code;
 				btn.classList.toggle('is-active', active);
@@ -1566,9 +1571,88 @@
 			});
 			setActiveLanguageFlag({ da: 'DK', en: 'EN', de: 'DE' }[window.PB_LANG] || 'DK');
 			let isAuthorized = false;
+			const updateButton = document.getElementById('pbUpdateButton');
+			const menuVersion = document.getElementById('pbMenuVersion');
+			const updateOverlay = document.getElementById('pbUpdateOverlay');
+			const updateOverlayText = document.getElementById('pbUpdateOverlayText');
+			const runningVersion = menuVersion ? (menuVersion.getAttribute('data-version') || '') : '';
+			let pendingUpdateVersion = '';
+			let updateChecked = false;
+
+			function showUpdateOverlay(text) {
+				if (updateOverlayText) updateOverlayText.textContent = text;
+				if (updateOverlay) updateOverlay.hidden = false;
+			}
+
+			function renderUpdateButton(data) {
+				pendingUpdateVersion = data && data.update_available ? String(data.latest || '') : '';
+				if (updateButton) {
+					updateButton.hidden = !pendingUpdateVersion;
+					updateButton.disabled = false;
+					updateButton.textContent = pendingUpdateVersion
+						? pbT('menu.update', { from: runningVersion, to: pendingUpdateVersion })
+						: '';
+					updateButton.title = data && data.state === 'failed' ? pbT('menu.updateFailed') : '';
+				}
+				if (menuButton) menuButton.classList.toggle('has-update', !!pendingUpdateVersion);
+			}
+
+			async function checkForUpdate(force) {
+				if (!isAuthorized || (updateChecked && !force)) return;
+				updateChecked = true;
+				try {
+					renderUpdateButton(await postSettingsAction({ action: 'update-status', force: !!force }));
+				} catch (_) {
+					updateChecked = false;
+				}
+			}
+
+			async function waitForVersion(target) {
+				const deadline = Date.now() + 10 * 60 * 1000;
+				while (Date.now() < deadline) {
+					await new Promise((resolve) => window.setTimeout(resolve, 4000));
+					try {
+						const data = await postSettingsAction({ action: 'update-status' });
+						if (data.current === target) return 'done';
+						if (data.state === 'failed') return 'failed';
+					} catch (_) {
+						// The service is restarting; keep polling.
+					}
+				}
+				return 'timeout';
+			}
+
+			async function installUpdate() {
+				const target = pendingUpdateVersion;
+				if (!target) return;
+				if (!window.confirm(pbT('menu.updateConfirm', { from: runningVersion, to: target }))) return;
+				closeMenuPanel();
+				if (updateButton) updateButton.disabled = true;
+				showUpdateOverlay(pbT('menu.updating', { from: runningVersion, to: target }));
+				try {
+					await postSettingsAction({ action: 'update-install', version: target });
+				} catch (error) {
+					if (updateOverlay) updateOverlay.hidden = true;
+					if (updateButton) updateButton.disabled = false;
+					window.alert(pbT('menu.updateFailed') + (error && error.message ? ` (${error.message})` : ''));
+					return;
+				}
+				const result = await waitForVersion(target);
+				if (result === 'done') {
+					showUpdateOverlay(pbT('menu.updateDone', { version: target }));
+					window.setTimeout(() => window.location.reload(), 1200);
+					return;
+				}
+				if (updateOverlay) updateOverlay.hidden = true;
+				if (updateButton) updateButton.disabled = false;
+				window.alert(pbT(result === 'failed' ? 'menu.updateFailed' : 'menu.updateTimeout'));
+			}
+
+			if (updateButton) updateButton.addEventListener('click', installUpdate);
 
 			function setMenuState(authorized) {
 				isAuthorized = !!authorized;
+				if (isAuthorized) checkForUpdate(false);
 				if (!menuButton) return;
 				menuButton.classList.toggle('is-locked', !isAuthorized);
 				menuButton.setAttribute('aria-label', pbT(isAuthorized ? 'menu.title' : 'menu.login'));
@@ -1591,6 +1675,7 @@
 
 			function openMenuPanel() {
 				if (!menuPanel || !isAuthorized) return;
+				checkForUpdate(false);
 				menuPanel.classList.add('open');
 				menuPanel.setAttribute('aria-hidden', 'false');
 				if (menuButton) {
@@ -1634,6 +1719,7 @@
 				if (settingsStatus) settingsStatus.textContent = '';
 				loadDummyPriceSetting();
 				loadLanguageSetting();
+				loadClaudeSetting();
 			}
 
 			function settingsActionUrl() {
@@ -1669,6 +1755,66 @@
 				} finally {
 					dummyPricesToggle.disabled = false;
 				}
+			}
+
+			function renderClaudeState(data) {
+				const configured = Boolean(data && data.configured);
+				if (claudeState) {
+					claudeState.textContent = configured
+						? pbT('settings.claude.active', { model: String((data && data.model) || '') })
+						: pbT('settings.claude.inactive');
+					claudeState.classList.toggle('is-active', configured);
+				}
+				if (claudeRemoveButton) claudeRemoveButton.hidden = !configured;
+				if (claudeKeyInput) {
+					claudeKeyInput.placeholder = configured
+						? pbT('settings.claude.placeholderReplace')
+						: pbT('settings.claude.placeholder');
+				}
+			}
+
+			async function loadClaudeSetting() {
+				if (!claudeForm || !isAuthorized) return;
+				try {
+					renderClaudeState(await postSettingsAction({ action: 'claude-status' }));
+				} catch (_) {
+					// Keep the default state when status lookup fails.
+				}
+			}
+
+			function settingsErrorText(error) {
+				if (error && error.message === 'unauthorized') return pbT('common.sessionExpired');
+				if (error && error.message === 'invalid_api_key') return pbT('settings.claude.invalid');
+				return pbT('settings.saveFailed', { error: error && error.message ? error.message : pbT('common.unknownError') });
+			}
+
+			async function saveClaudeKey(apiKey) {
+				if (!isAuthorized) return;
+				const controls = [claudeKeyInput, claudeSaveButton, claudeRemoveButton].filter(Boolean);
+				controls.forEach((item) => { item.disabled = true; });
+				if (settingsStatus) settingsStatus.textContent = apiKey ? pbT('settings.claude.verifying') : '';
+				try {
+					const data = await postSettingsAction({ action: 'set-claude-key', api_key: apiKey });
+					renderClaudeState(data);
+					if (claudeKeyInput) claudeKeyInput.value = '';
+					if (settingsStatus) {
+						if (!apiKey) settingsStatus.textContent = pbT('settings.claude.removed');
+						else if (data.verified !== true) settingsStatus.textContent = pbT('settings.claude.savedUnverified');
+						else if (data.model_available === false) settingsStatus.textContent = pbT('settings.claude.modelMissing', { model: String(data.model || '') });
+						else settingsStatus.textContent = pbT('settings.claude.saved');
+					}
+				} catch (error) {
+					if (settingsStatus) settingsStatus.textContent = settingsErrorText(error);
+				} finally {
+					controls.forEach((item) => { item.disabled = false; });
+				}
+			}
+
+			function describePlanResult(data) {
+				const ai = data && data.ai;
+				if (!ai || !ai.enabled || !ai.days) return pbT('settings.done');
+				if (ai.accepted === ai.days) return pbT('settings.doneAi', { accepted: ai.accepted });
+				return pbT('settings.doneAiPartial', { accepted: ai.accepted, total: ai.days });
 			}
 
 			async function loadLanguageSetting() {
@@ -1965,11 +2111,13 @@
 					const action = button.getAttribute('data-settings-action') || '';
 					if (!action || !isAuthorized) return;
 					settingsActions.forEach((item) => { item.disabled = true; });
-					if (settingsStatus) settingsStatus.textContent = pbT('settings.running');
+					const usesAi = claudeState && claudeState.classList.contains('is-active');
+					if (settingsStatus) settingsStatus.textContent = pbT(usesAi ? 'settings.runningAi' : 'settings.running');
 					try {
-						await postSettingsAction({ action });
-						if (settingsStatus) settingsStatus.textContent = pbT('settings.done');
-						window.setTimeout(() => window.location.reload(), 250);
+						const data = await postSettingsAction({ action });
+						const message = describePlanResult(data);
+						if (settingsStatus) settingsStatus.textContent = message;
+						window.setTimeout(() => window.location.reload(), message === pbT('settings.done') ? 250 : 2500);
 					} catch (error) {
 						if (settingsStatus) {
 							settingsStatus.textContent = error && error.message === 'unauthorized'
@@ -1996,6 +2144,23 @@
 					}
 				});
 			});
+
+			if (claudeForm) {
+				claudeForm.addEventListener('submit', (event) => {
+					event.preventDefault();
+					const apiKey = claudeKeyInput ? claudeKeyInput.value.trim() : '';
+					if (!apiKey) {
+						if (claudeKeyInput) claudeKeyInput.focus();
+						return;
+					}
+					saveClaudeKey(apiKey);
+				});
+			}
+			if (claudeRemoveButton) {
+				claudeRemoveButton.addEventListener('click', () => {
+					if (window.confirm(pbT('settings.claude.removeConfirm'))) saveClaudeKey('');
+				});
+			}
 
 			if (dummyPricesToggle) {
 				dummyPricesToggle.addEventListener('change', async () => {
