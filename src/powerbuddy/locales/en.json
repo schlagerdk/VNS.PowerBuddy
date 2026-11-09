@@ -215,7 +215,7 @@
   "settings.claude.active": "Active · {model}",
   "settings.claude.inactive": "Inactive",
   "settings.claude.placeholder": "Paste Claude API key (sk-ant-...)",
-  "settings.claude.placeholderReplace": "Key saved – paste a new one to replace",
+  "settings.claude.placeholderReplace": "Key saved ✓",
   "settings.claude.save": "Save",
   "settings.claude.remove": "Remove",
   "settings.claude.verifying": "Verifying API key...",

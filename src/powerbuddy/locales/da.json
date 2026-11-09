@@ -215,7 +215,7 @@
   "settings.claude.active": "Aktiv · {model}",
   "settings.claude.inactive": "Ikke aktiv",
   "settings.claude.placeholder": "Indsæt Claude API-nøgle (sk-ant-...)",
-  "settings.claude.placeholderReplace": "Nøgle gemt – indsæt ny for at erstatte",
+  "settings.claude.placeholderReplace": "Nøgle gemt ✓",
   "settings.claude.save": "Gem",
   "settings.claude.remove": "Fjern",
   "settings.claude.verifying": "Kontrollerer API-nøgle...",

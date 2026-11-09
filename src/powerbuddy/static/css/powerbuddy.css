@@ -520,6 +520,7 @@
 		.pb-claude-input {
 			flex: 1 1 auto;
 			min-width: 0;
+			text-overflow: ellipsis;
 			padding: 8px 10px;
 			border: 1px solid rgba(148, 163, 184, 0.3);
 			border-radius: 8px;
@@ -630,6 +631,22 @@
 			background: rgba(2, 6, 23, 0.4);
 			overscroll-behavior: contain;
 			touch-action: pan-y;
+		}
+
+		.pb-settings-status {
+			margin-top: 14px;
+			padding: 10px 14px;
+			border: 1px solid rgba(56, 189, 248, 0.35);
+			border-left: 3px solid #38bdf8;
+			border-radius: 10px;
+			background: rgba(14, 165, 233, 0.1);
+			color: #e2e8f0;
+			font-size: 12px;
+			line-height: 1.45;
+		}
+
+		.pb-settings-status:empty {
+			display: none;
 		}
 
 		.pb-log-status {
