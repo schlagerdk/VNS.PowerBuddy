@@ -1556,6 +1556,7 @@
 			const settingsModal = document.getElementById('pbSettingsModal');
 			const settingsClose = document.getElementById('pbSettingsModalClose');
 			const settingsStatus = document.getElementById('pbSettingsStatus');
+			let settingsPageScrollY = null;
 			if (settingsStatus) {
 				// Auto-hide final status messages; progress messages stay until replaced.
 				const persistentStatusKeys = ['settings.running', 'settings.runningAi', 'settings.claude.verifying'];
@@ -1735,6 +1736,11 @@
 
 			function openSettingsModal() {
 				if (!settingsModal) return;
+				if (settingsPageScrollY === null) {
+					settingsPageScrollY = window.scrollY;
+					document.body.style.setProperty('--pb-settings-page-offset', `${-settingsPageScrollY}px`);
+					document.body.classList.add('pb-settings-scroll-lock');
+				}
 				settingsModal.classList.add('open');
 				settingsModal.setAttribute('aria-hidden', 'false');
 				document.body.classList.add('pb-modal-open');
@@ -1855,6 +1861,12 @@
 				settingsModal.setAttribute('aria-hidden', 'true');
 				if (!document.querySelector('.pb-log-modal.open, .pb-action-modal.open')) {
 					document.body.classList.remove('pb-modal-open');
+				}
+				if (settingsPageScrollY !== null) {
+					document.body.classList.remove('pb-settings-scroll-lock');
+					document.body.style.removeProperty('--pb-settings-page-offset');
+					window.scrollTo(0, settingsPageScrollY);
+					settingsPageScrollY = null;
 				}
 			}
 

@@ -53,11 +53,12 @@ Core capabilities:
 - Stripes mark every non-`auto` action (planned or manual) in the chart.
 - Full-battery protection: an active `charge` period (hour or half hour, planned or manual) becomes `hold` when the battery is full; later charge points are evaluated when they become active.
 - Dashboard language switch (🇩🇰 🇬🇧 🇩🇪) in the settings dialog, persisted to `.env` without a service restart.
+- The settings dialog scrolls independently on smaller screens and preserves the dashboard's scroll position.
 - Self-update: the menu always shows the running version and, when a newer GitHub release exists, an update button (`Update 1.0.16 → 1.0.17`). It installs the release tag with the service's own `pip` (via `systemd-run`) and restarts `powerbuddy.service`; output goes to `update.log` next to the database. Override with `POWERBUDDY_UPDATE_REPO` / `POWERBUDDY_SERVICE_NAME`.
 
 ## Compatibility
 
-This release (`v1.0.20`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.21`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 

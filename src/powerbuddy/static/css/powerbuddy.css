@@ -46,6 +46,13 @@
 			touch-action: none;
 		}
 
+		body.pb-settings-scroll-lock {
+			position: fixed;
+			top: var(--pb-settings-page-offset);
+			left: 0;
+			width: 100%;
+		}
+
 		body.overview-mode .page {
 			padding-top: 28px;
 			padding-bottom: 0;
@@ -298,11 +305,22 @@
 
 		.pb-settings-modal-card {
 			width: min(560px, calc(100vw - 24px));
+			max-height: min(84dvh, 820px);
+		}
+
+		.pb-settings-modal-card .pb-log-modal-head {
+			flex-shrink: 0;
 		}
 
 		.pb-settings-body {
+			min-height: 0;
 			padding: 18px;
 			background: rgba(2, 6, 23, 0.4);
+			overflow-x: hidden;
+			overflow-y: auto;
+			overscroll-behavior: contain;
+			touch-action: pan-y;
+			-webkit-overflow-scrolling: touch;
 		}
 
 		.pb-settings-intro {
@@ -680,16 +698,19 @@
 			touch-action: pan-y;
 		}
 
+		.pb-settings-body::-webkit-scrollbar,
 		.pb-log-modal-body::-webkit-scrollbar,
 		.pb-log-output::-webkit-scrollbar {
 			width: 10px;
 		}
 
+		.pb-settings-body::-webkit-scrollbar-track,
 		.pb-log-modal-body::-webkit-scrollbar-track,
 		.pb-log-output::-webkit-scrollbar-track {
 			background: rgba(15, 23, 42, 0.72);
 		}
 
+		.pb-settings-body::-webkit-scrollbar-thumb,
 		.pb-log-modal-body::-webkit-scrollbar-thumb,
 		.pb-log-output::-webkit-scrollbar-thumb {
 			background: rgba(148, 163, 184, 0.72);

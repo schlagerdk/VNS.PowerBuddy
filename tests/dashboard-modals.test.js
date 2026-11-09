@@ -17,6 +17,12 @@ class Element {
 	constructor(attributes = {}) {
 		this.attributes = attributes;
 		this.listeners = {};
+		const styles = new Map();
+		this.style = {
+			setProperty: (name, value) => styles.set(name, value),
+			removeProperty: (name) => styles.delete(name),
+			getPropertyValue: (name) => styles.get(name) || '',
+		};
 		const classes = new Set();
 		this.classList = {
 			add: (...names) => names.forEach((name) => classes.add(name)),
@@ -75,6 +81,8 @@ function dashboard() {
 		PB_LANG: 'da',
 		PB_I18N: {},
 		location: { href: 'https://test.invalid/powerbuddy', search: '' },
+		scrollY: 0,
+		scrollTo: (x, y) => { window.scrollY = y; },
 		setTimeout: () => 0,
 		clearTimeout: () => {},
 		addEventListener: () => {},
@@ -85,7 +93,7 @@ function dashboard() {
 		document, window, fetch, URL, URLSearchParams,
 		pbT: (key) => key,
 	});
-	return { logs, settings, login, logClose, settingsClose, logMenu, settingsMenu, document };
+	return { logs, settings, login, logClose, settingsClose, logMenu, settingsMenu, document, window };
 }
 
 test('log and settings stay open on backdrop clicks and close with their X', () => {
@@ -115,4 +123,39 @@ test('the login modal still closes when its backdrop is clicked', () => {
 	ui.login.click();
 	assert.equal(ui.login.classList.contains('open'), false);
 	assert.equal(ui.login.getAttribute('aria-hidden'), 'true');
+});
+
+test('settings lock and restore the page position, even if opened again', () => {
+	const ui = dashboard();
+	ui.window.scrollY = 240;
+	ui.settingsMenu.click();
+	assert.equal(ui.document.body.classList.contains('pb-settings-scroll-lock'), true);
+	assert.equal(ui.document.body.style.getPropertyValue('--pb-settings-page-offset'), '-240px');
+
+	ui.window.scrollY = 0;
+	ui.settingsMenu.click();
+	assert.equal(ui.document.body.style.getPropertyValue('--pb-settings-page-offset'), '-240px');
+	ui.settings.click();
+	assert.equal(ui.document.body.classList.contains('pb-settings-scroll-lock'), true);
+
+	ui.settingsClose.click();
+	assert.equal(ui.window.scrollY, 240);
+	assert.equal(ui.document.body.classList.contains('pb-settings-scroll-lock'), false);
+	assert.equal(ui.document.body.classList.contains('pb-modal-open'), false);
+	assert.equal(ui.document.body.style.getPropertyValue('--pb-settings-page-offset'), '');
+});
+
+test('closing settings leaves the general lock in place while another modal is open', () => {
+	const ui = dashboard();
+	ui.window.scrollY = 120;
+	ui.settingsMenu.click();
+	ui.logs.classList.add('open');
+
+	ui.settingsClose.click();
+	assert.equal(ui.window.scrollY, 120);
+	assert.equal(ui.document.body.classList.contains('pb-settings-scroll-lock'), false);
+	assert.equal(ui.document.body.classList.contains('pb-modal-open'), true);
+
+	ui.logClose.click();
+	assert.equal(ui.document.body.classList.contains('pb-modal-open'), false);
 });
