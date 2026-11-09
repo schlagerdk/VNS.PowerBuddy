@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint
-from powerbuddy.services.planner import DayPlanner
+from powerbuddy.services.planner import DayPlanner, SimulationInputs, is_protected_action
 
 
 @dataclass(slots=True)
@@ -82,8 +82,13 @@ def _total_cost_ore(
     prices_by_hour: dict[int, float],
     tariff_ore_per_hour: list[float] | None,
     pv_weather_factor_24h: list[float] | None,
+    simulation_inputs: SimulationInputs | None,
+    simulation_start_time: datetime | None,
 ) -> float:
-    sim = planner.simulate(day, actions, start_soc=start_soc, pv_weather_factor_24h=pv_weather_factor_24h)
+    sim = planner.simulate(
+        day, actions, start_soc=start_soc, pv_weather_factor_24h=pv_weather_factor_24h,
+        simulation_inputs=simulation_inputs, simulation_start_time=simulation_start_time,
+    )
     total = 0.0
     for point in sim:
         hour = int(point.timestamp.hour)
@@ -101,10 +106,15 @@ def _soc_before_expensive(
     start_soc: float,
     first_expensive_idx: int,
     pv_weather_factor_24h: list[float] | None,
+    simulation_inputs: SimulationInputs | None,
+    simulation_start_time: datetime | None,
 ) -> float:
     if first_expensive_idx <= 0:
         return float(start_soc)
-    sim = planner.simulate(day, actions, start_soc=start_soc, pv_weather_factor_24h=pv_weather_factor_24h)
+    sim = planner.simulate(
+        day, actions, start_soc=start_soc, pv_weather_factor_24h=pv_weather_factor_24h,
+        simulation_inputs=simulation_inputs, simulation_start_time=simulation_start_time,
+    )
     idx = min(first_expensive_idx - 1, len(sim) - 1)
     if idx < 0:
         return float(start_soc)
@@ -119,6 +129,9 @@ def choose_best_plan_variant(
     start_soc: float,
     tariff_ore_per_hour: list[float] | None = None,
     pv_weather_factor_24h: list[float] | None = None,
+    simulation_inputs: SimulationInputs | None = None,
+    simulation_start_time: datetime | None = None,
+    protected_action_starts: set[datetime] | None = None,
 ) -> tuple[list[PlanAction], dict[str, object]]:
     report: dict[str, object] = {
         "enabled": bool(settings.planning_variant_search_enabled),
@@ -173,7 +186,14 @@ def choose_best_plan_variant(
 
     first_expensive_idx = min(expensive_indices)
 
-    pre_exp = [idx for idx in valid_indices if idx < first_expensive_idx and not actions_sorted[idx].is_manual_override]
+    protected_starts = {
+        start.replace(tzinfo=None) if start.tzinfo else start
+        for start in (protected_action_starts or set())
+    }
+    pre_exp = [
+        idx for idx in valid_indices
+        if idx < first_expensive_idx and not is_protected_action(actions_sorted[idx], protected_starts)
+    ]
     if not pre_exp:
         return actions_sorted, report
 
@@ -252,6 +272,8 @@ def choose_best_plan_variant(
             start_soc,
             first_expensive_idx,
             pv_weather_factor_24h,
+            simulation_inputs,
+            simulation_start_time,
         )
         if soc_before + 1e-6 < required_soc:
             continue
@@ -266,6 +288,8 @@ def choose_best_plan_variant(
                 prices_by_hour,
                 tariff_ore_per_hour,
                 scenario_factors,
+                simulation_inputs,
+                simulation_start_time,
             )
 
         report["candidates_evaluated"] = int(report["candidates_evaluated"]) + 1

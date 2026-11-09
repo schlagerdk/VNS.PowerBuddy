@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import os
 import stat
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -12,8 +13,9 @@ from pydantic import SecretStr
 
 from powerbuddy import main
 from powerbuddy.config import settings
-from powerbuddy.models import PricePoint
+from powerbuddy.models import PlanAction, PricePoint
 from powerbuddy.services import claude_planner as ai
+from powerbuddy.services.planner import DayPlanner
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 
 VALID_KEY = "sk-ant-api03-" + "A" * 40
@@ -224,3 +226,155 @@ def test_manual_fetch_replans_only_fetched_days_when_requested(monkeypatch):
     assert planned == []
     assert asyncio.run(scheduler.manual_fetch_prices(replan_fetched=True)) == 1
     assert planned == [fetched_day]
+
+
+@pytest.mark.parametrize("survives", [True, False])
+def test_scheduler_protects_manual_and_locked_actions_and_reconciles_outcome(monkeypatch, survives):
+    now = datetime.now(ZoneInfo(settings.timezone)).replace(
+        minute=0, second=0, microsecond=0, tzinfo=None,
+    )
+    day = now.date()
+    locked = PlanAction(
+        date_key=day.isoformat(), start_time=now, end_time=now + timedelta(hours=1),
+        action="hold", reason="locked", is_manual_override=False,
+    )
+    manual = PlanAction(
+        date_key=day.isoformat(), start_time=now + timedelta(hours=2),
+        end_time=now + timedelta(hours=2, minutes=30),
+        action="hold", reason="manual", is_manual_override=True,
+    )
+    proposed = PlanAction(
+        date_key=day.isoformat(), start_time=now + timedelta(hours=3),
+        end_time=now + timedelta(hours=4), action="auto",
+        reason="Claude price proposal (locally validated)", is_manual_override=False,
+    )
+    stored = []
+    captured = []
+
+    async def fake_plan(planner, data, prepare_for_comparison):
+        captured.append(data)
+        ai._record(data, "accepted")
+        actions = [proposed]
+        return ai.PlanSelection(actions, prepare_for_comparison(actions))
+
+    async def no_tariff():
+        return [0.0] * 24
+
+    async def no_weather(day):
+        return None
+
+    def replace_plan(day_key, actions):
+        stored.extend([manual, *actions])
+
+    planner = DayPlanner()
+    monkeypatch.setattr(settings, "planning_sanity_enabled", False)
+    monkeypatch.setattr(settings, "planning_variant_search_enabled", False)
+    monkeypatch.setattr(planner, "simulate", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        planner, "trim_redundant_charge_actions",
+        lambda day, actions, start_soc, **kwargs: [
+            action for action in actions if survives or action.reason != proposed.reason
+        ],
+    )
+    monkeypatch.setattr("powerbuddy.services.scheduler.select_plan_with_claude", fake_plan)
+    monkeypatch.setattr("powerbuddy.services.scheduler.tariff_service.get_network_tariff_24h", no_tariff)
+    monkeypatch.setattr("powerbuddy.services.scheduler.tariff_service.total_tariff_ore_24h", lambda tariffs: tariffs)
+    monkeypatch.setattr("powerbuddy.services.scheduler.weather_forecast_service.get_hourly_pv_factor_24h", no_weather)
+    monkeypatch.setattr(
+        "powerbuddy.services.scheduler.PlanRepository.get_plan",
+        lambda day_key: stored or [locked, manual],
+    )
+    monkeypatch.setattr("powerbuddy.services.scheduler.PlanRepository.replace_plan", replace_plan)
+    monkeypatch.setattr("powerbuddy.services.scheduler.SimulationRepository.replace_points", lambda *args: None)
+    scheduler = object.__new__(PowerBuddyScheduler)
+    scheduler.planner = planner
+
+    async def run():
+        with ai.collect_outcomes() as outcomes:
+            await scheduler._plan_and_simulate(day, [], 50.0, lock_hours=1)
+        return outcomes
+
+    outcomes = asyncio.run(run())
+    protected = captured[0].locally_protected_actions
+    assert protected is not None
+    assert {(action.start_time, action.is_manual_override) for action in protected} == {
+        (locked.start_time, False), (manual.start_time, True),
+    }
+    assert outcomes[day.isoformat()] == ("accepted" if survives else "rejected")
+
+
+def test_lazy_day_plan_protects_existing_manual_overrides(monkeypatch):
+    day = date(2026, 11, 12)
+    start = datetime.combine(day, datetime.min.time())
+    manual = PlanAction(
+        date_key=day.isoformat(), start_time=start, end_time=start + timedelta(minutes=30),
+        action="hold", reason="manual", is_manual_override=True,
+    )
+    proposed = PlanAction(
+        date_key=day.isoformat(), start_time=start + timedelta(hours=1),
+        end_time=start + timedelta(hours=2), action="auto",
+        reason="Claude price proposal (locally validated)", is_manual_override=False,
+    )
+    protected_charge = PlanAction(
+        date_key=day.isoformat(), start_time=start, end_time=start + timedelta(hours=1),
+        action="charge", charge_power_w=1000.0, reason="winter cheap-hour charging floor",
+        is_manual_override=False,
+    )
+    price = PricePoint(
+        timestamp=start, area="DK2", price_ore_per_kwh=1.0,
+        currency="DKK", source="elprisenligenu",
+    )
+    stored = []
+    captured = []
+    simulated = []
+
+    async def get_prices(day):
+        return [price], False
+
+    async def get_soc(day):
+        return 50.0
+
+    async def get_weather(day):
+        return None
+
+    async def get_tariff():
+        return [0.0] * 24
+
+    async def fake_plan(planner, data, prepare_for_comparison):
+        captured.append(data)
+        ai._record(data, "accepted")
+        actions = [protected_charge, proposed]
+        return ai.PlanSelection(actions, prepare_for_comparison(actions))
+
+    def simulate(day, actions, start_soc, **kwargs):
+        simulated.append(list(actions))
+        return []
+
+    planner = DayPlanner()
+    monkeypatch.setattr(planner, "simulate", simulate)
+    monkeypatch.setattr(settings, "planning_sanity_enabled", False)
+    monkeypatch.setattr(settings, "planning_variant_search_enabled", False)
+    monkeypatch.setattr(main, "DayPlanner", lambda: planner)
+    monkeypatch.setattr(main, "_has_full_hourly_coverage", lambda day, actions: False)
+    monkeypatch.setattr(main, "_get_day_prices_with_provisional_fallback", get_prices)
+    monkeypatch.setattr(main, "_resolve_start_soc_for_day", get_soc)
+    monkeypatch.setattr(main, "select_plan_with_claude", fake_plan)
+    monkeypatch.setattr(main.weather_forecast_service, "get_hourly_pv_factor_24h", get_weather)
+    monkeypatch.setattr(main.tariff_service, "get_network_tariff_24h", get_tariff)
+    monkeypatch.setattr(main.tariff_service, "total_tariff_ore_24h", lambda tariffs: tariffs)
+    monkeypatch.setattr(main.PlanRepository, "get_plan", lambda day_key: stored or [manual])
+    monkeypatch.setattr(main.PlanRepository, "replace_plan", lambda day_key, actions: stored.extend([manual, *actions]))
+    monkeypatch.setattr(main.SimulationRepository, "replace_points", lambda *args: None)
+
+    async def run():
+        with ai.collect_outcomes() as outcomes:
+            await main._materialize_day_plan_if_missing(day)
+        return outcomes
+
+    outcomes = asyncio.run(run())
+    assert captured[0].locally_protected_actions == [manual]
+    assert outcomes[day.isoformat()] == "accepted"
+    remainder = next(action for action in stored if action.start_time == manual.end_time)
+    assert remainder.end_time == protected_charge.end_time
+    assert remainder.action == "charge" and remainder.reason == protected_charge.reason
+    assert sum(action.start_time.hour == start.hour for action in simulated[-1]) == 2

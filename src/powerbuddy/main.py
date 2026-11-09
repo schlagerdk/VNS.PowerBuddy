@@ -31,7 +31,7 @@ from powerbuddy.config import set_detected_battery_capacity_kwh, settings
 from powerbuddy.dashboard_ui import render_dashboard_html
 from powerbuddy.database import init_db
 from powerbuddy.i18n import normalize_language, t
-from powerbuddy.models import PlanAction, PricePoint
+from powerbuddy.models import PlanAction, PricePoint, SimulationPoint
 from powerbuddy.repositories import AppSettingsRepository, KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.schemas import (
     InverterRealtime,
@@ -51,16 +51,18 @@ from powerbuddy.schemas import (
 )
 from powerbuddy.services import half_hour
 from powerbuddy.services.inverter import get_inverter_client
+from powerbuddy.services.plan_processing import PreparedPlan, process_actions
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.claude_planner import (
+    claude_action_signatures,
     claude_configured,
     collect_outcomes,
-    plan_with_claude,
+    reconcile_outcome,
+    select_plan_with_claude,
     summarize_outcomes,
     verify_api_key,
 )
 from powerbuddy.services.planning_sanity import apply_planning_sanity
-from powerbuddy.services.planning_variants import choose_best_plan_variant
 from powerbuddy.services.pricing import get_price_provider
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 from powerbuddy.services.tariff import tariff_service
@@ -1554,17 +1556,18 @@ async def _resolve_start_soc_for_day(day: date) -> float:
 
     planner = DayPlanner()
     tz = ZoneInfo(settings.timezone)
-    now_local_hour = datetime.now(tz).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+    now_local = datetime.now(tz).replace(tzinfo=None)
+    now_local_hour = now_local.replace(minute=0, second=0, microsecond=0)
     projected_soc = max(float(settings.battery_min_soc), min(100.0, float(live_soc)))
 
     cursor_day = today
     while cursor_day < day:
-        day_actions = PlanRepository.get_plan(cursor_day.isoformat())
+        day_actions = PowerBuddyScheduler._dedupe_effective_actions(PlanRepository.get_plan(cursor_day.isoformat()))
         if not day_actions:
             break
 
         if cursor_day == today:
-            day_actions = [a for a in day_actions if _naive_ts(a.start_time) >= now_local_hour]
+            day_actions = [a for a in day_actions if _naive_ts(a.end_time) > now_local_hour]
 
         if not day_actions:
             cursor_day += timedelta(days=1)
@@ -1577,6 +1580,7 @@ async def _resolve_start_soc_for_day(day: date) -> float:
                 day_actions,
                 start_soc=projected_soc,
                 pv_weather_factor_24h=weather_factors,
+                simulation_start_time=now_local if cursor_day == today else None,
             )
             if simulation:
                 projected_soc = max(
@@ -1870,101 +1874,118 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
     network_tariff = await tariff_service.get_network_tariff_24h()
     tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
-
-    generated = await plan_with_claude(
-        planner,
-        PlannerInput(
-            day=day,
-            price_points=prices,
-            start_soc=start_soc,
-            tariff_ore_per_hour=tariff_24h,
-            pv_weather_factor_24h=weather_factors,
-        )
-    )
-
     manual_overrides = [action for action in existing if action.is_manual_override]
-    if manual_overrides:
-        filtered: list[PlanAction] = []
-        for action in generated:
-            start = _naive_ts(action.start_time)
-            end = _naive_ts(action.end_time)
+
+    now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    data = PlannerInput(
+        day=day,
+        price_points=prices,
+        start_soc=start_soc,
+        tariff_ore_per_hour=tariff_24h,
+        pv_weather_factor_24h=weather_factors,
+        locally_protected_actions=manual_overrides,
+        simulation_start_time=now_local if day == now_local.date() else None,
+    )
+    prepared: dict[int, tuple[list[PlanAction], PreparedPlan]] = {}
+    context_refreshed = False
+
+    def prepare(raw_actions: list[PlanAction]) -> PreparedPlan:
+        nonlocal context_refreshed
+        if not context_refreshed:
+            manual_overrides[:] = [
+                action for action in PlanRepository.get_plan(day_key) if action.is_manual_override
+            ]
+            data.locally_protected_actions = manual_overrides
+            context_refreshed = True
+        cached = prepared.get(id(raw_actions))
+        if cached is not None and cached[0] is raw_actions:
+            return cached[1]
+        generated = PowerBuddyScheduler._dedupe_effective_actions(raw_actions)
+        partially_overridden = [
+            action for action in generated
             if any(
-                _overlaps(start, end, _naive_ts(manual.start_time), _naive_ts(manual.end_time))
+                _overlaps(
+                    _naive_ts(action.start_time), _naive_ts(action.end_time),
+                    _naive_ts(manual.start_time), _naive_ts(manual.end_time),
+                )
                 for manual in manual_overrides
-            ):
-                continue
-            filtered.append(action)
-        generated = filtered
-
-    if provisional:
-        if generated and all(action.action == "hold" for action in generated):
-            # If we only have provisional prices and DP collapses to all-hold,
-            # enforce a sensible baseline policy: precharge at night and keep
-            # reserve window in auto mode.
-            target_soc = min(
-                float(settings.battery_max_soc),
-                max(
-                    float(settings.must_charge_window_min_soc_percent),
-                    float(settings.reserve_soc_min_percent) + 20.0,
-                    90.0,
-                ),
             )
-            estimated_soc = max(float(settings.battery_min_soc), min(float(settings.battery_max_soc), float(start_soc)))
-            charge_soc_step = (
-                (planner.max_charge_kwh * planner.charge_efficiency / max(planner.capacity_kwh, 1e-6)) * 100.0
-            )
+        ]
+        generated = [action for action in generated if action not in partially_overridden]
 
+        if provisional:
+            if generated and all(action.action == "hold" for action in generated):
+                target_soc = min(
+                    float(settings.battery_max_soc),
+                    max(
+                        float(settings.must_charge_window_min_soc_percent),
+                        float(settings.reserve_soc_min_percent) + 20.0,
+                        90.0,
+                    ),
+                )
+                estimated_soc = max(float(settings.battery_min_soc), min(float(settings.battery_max_soc), float(start_soc)))
+                charge_soc_step = (
+                    (planner.max_charge_kwh * planner.charge_efficiency / max(planner.capacity_kwh, 1e-6)) * 100.0
+                )
+                for action in generated:
+                    hour = int(_naive_ts(action.start_time).hour)
+                    if 0 <= hour < 7 and estimated_soc + 0.1 < target_soc:
+                        estimated_soc = min(float(settings.battery_max_soc), estimated_soc + charge_soc_step)
+                        action.action = "charge"
+                        action.charge_power_w = round(planner.max_charge_kwh * 1000.0, 1)
+                        action.target_soc = round(estimated_soc, 1)
+                        action.reason = "provisional fallback: night precharge policy"
+                    elif planner._is_reserve_hour(action.start_time):
+                        action.action = "auto"
+                        action.charge_power_w = None
+                        action.target_soc = round(estimated_soc, 1)
+                        action.reason = "provisional fallback: reserve discharge readiness"
+                    else:
+                        action.action = "hold"
+                        action.charge_power_w = None
+                        action.target_soc = None
+                        action.reason = "provisional fallback: normal operation window"
             for action in generated:
-                hour = int(_naive_ts(action.start_time).hour)
-                if 0 <= hour < 7 and estimated_soc + 0.1 < target_soc:
-                    estimated_soc = min(float(settings.battery_max_soc), estimated_soc + charge_soc_step)
-                    action.action = "charge"
-                    action.charge_power_w = round(planner.max_charge_kwh * 1000.0, 1)
-                    action.target_soc = round(estimated_soc, 1)
-                    action.reason = "provisional fallback: night precharge policy"
-                elif planner._is_reserve_hour(action.start_time):
-                    action.action = "auto"
-                    action.charge_power_w = None
-                    action.target_soc = round(estimated_soc, 1)
-                    action.reason = "provisional fallback: reserve discharge readiness"
-                else:
-                    action.action = "hold"
-                    action.charge_power_w = None
-                    action.target_soc = None
-                    action.reason = "provisional fallback: normal operation window"
+                if not action.reason.startswith("provisional fallback:"):
+                    action.reason = f"provisional fallback: {action.reason}"
 
-        for action in generated:
-            if not action.reason.startswith("provisional fallback:"):
-                action.reason = f"provisional fallback: {action.reason}"
+        effective = PowerBuddyScheduler._dedupe_effective_actions(
+            manual_overrides + generated + partially_overridden
+        )
+        effective, sanity_report, variant_report = process_actions(
+            planner, data, effective, trim_redundant=False, protected_actions=partially_overridden,
+        )
+        actions_to_store = [action for action in effective if not action.is_manual_override]
+        final_actions = PowerBuddyScheduler._dedupe_effective_actions(manual_overrides + actions_to_store)
+        simulation_actions = final_actions
+        if data.simulation_start_time is not None:
+            boundary = data.simulation_start_time.replace(minute=0, second=0, microsecond=0)
+            simulation_actions = [action for action in final_actions if _naive_ts(action.end_time) > boundary]
+        result = PreparedPlan(
+            actions_to_store=actions_to_store,
+            simulation_actions=simulation_actions,
+            sanity_report=sanity_report,
+            variant_report=variant_report,
+        )
+        prepared[id(raw_actions)] = (raw_actions, result)
+        return result
 
-    generated, sanity_report = apply_planning_sanity(
-        planner=planner,
-        day=day,
-        actions=generated,
-        prices=prices,
-        start_soc=start_soc,
-        tariff_ore_per_hour=tariff_24h,
-        pv_weather_factor_24h=weather_factors,
-        auto_fix=bool(settings.planning_sanity_autofix_enabled),
+    selection = await select_plan_with_claude(
+        planner, data, lambda actions: prepare(actions).simulation_actions
     )
-    if bool(sanity_report.get("auto_fix_applied")):
-        generated = sorted(generated, key=lambda action: action.start_time)
+    selected = prepare(selection.planned_actions)
+    claude_actions = claude_action_signatures(selection.planned_actions)
+    PlanRepository.replace_plan(day_key, selected.actions_to_store)
 
-    generated, variant_report = choose_best_plan_variant(
-        planner=planner,
-        day=day,
-        actions=generated,
-        prices=prices,
-        start_soc=start_soc,
-        tariff_ore_per_hour=tariff_24h,
-        pv_weather_factor_24h=weather_factors,
+    final_actions = PlanRepository.get_plan(day_key)
+    reconcile_outcome(day, claude_actions, final_actions)
+    simulation = (
+        planner.simulate(
+            day, selection.comparison_actions, start_soc, pv_weather_factor_24h=weather_factors,
+            simulation_inputs=data.simulation_inputs, simulation_start_time=data.simulation_start_time,
+        )
+        if selection.comparison_actions else []
     )
-    if variant_report.get("best_changes"):
-        generated = sorted(generated, key=lambda action: action.start_time)
-
-    PlanRepository.replace_plan(day_key, generated)
-
-    simulation = planner.simulate(day, PlanRepository.get_plan(day_key), start_soc, pv_weather_factor_24h=weather_factors)
     SimulationRepository.replace_points(day_key, simulation)
 
 
@@ -1981,16 +2002,23 @@ async def _refresh_simulation_for_day(day: date, actions: list[PlanAction] | Non
     """Recompute simulation and persist it; for today, project only from current hour using live SOC."""
     planner = DayPlanner()
     day_key = day.isoformat()
-    day_actions = actions if actions is not None else PlanRepository.get_plan(day_key)
+    day_actions = PowerBuddyScheduler._dedupe_effective_actions(
+        actions if actions is not None else PlanRepository.get_plan(day_key)
+    )
 
     current_soc = await _resolve_current_soc()
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
-    if day == date.today():
-        now_local_hour = datetime.now(ZoneInfo(settings.timezone)).replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
-        day_actions = [a for a in day_actions if _naive_ts(a.start_time) >= now_local_hour]
+    now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    simulation_start_time = now_local if day == now_local.date() else None
+    if simulation_start_time is not None:
+        now_local_hour = now_local.replace(minute=0, second=0, microsecond=0)
+        day_actions = [a for a in day_actions if _naive_ts(a.end_time) > now_local_hour]
 
     simulation = (
-        planner.simulate(day, day_actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors)
+        planner.simulate(
+            day, day_actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors,
+            simulation_start_time=simulation_start_time,
+        )
         if day_actions
         else []
     )
@@ -2150,6 +2178,15 @@ async def clear_tariff_manual_hours() -> TariffOut:
     return await get_tariff()
 
 
+def _hourly_simulation_values(points: list[SimulationPoint]) -> dict[datetime, tuple[float, float]]:
+    hourly: dict[datetime, tuple[float, float]] = {}
+    for point in sorted(points, key=lambda value: value.timestamp):
+        hour = point.timestamp.replace(minute=0, second=0, microsecond=0)
+        previous_grid = hourly[hour][1] if hour in hourly else 0.0
+        hourly[hour] = (float(point.projected_soc), round(previous_grid + float(point.projected_grid_kwh), 3))
+    return hourly
+
+
 @app.get("/planning/chart-data", tags=["planning"], summary="Get plan and chart data")
 async def planning_chart_data(target_date: date | None = None) -> PlanningChartOut:
     requested_day = target_date or date.today()
@@ -2165,24 +2202,68 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
     network_tariff = await tariff_service.get_network_tariff_24h()
 
     all_actions = PlanRepository.get_plan(day_key)
+    bootstrap_simulation: list[SimulationPoint] | None = None
     if not all_actions:
         # Bootstrap when no schedule exists yet.
         network_tariff_bootstrap = await tariff_service.get_network_tariff_24h()
         tariff_24h_bootstrap = tariff_service.total_tariff_ore_24h(network_tariff_bootstrap)
-        actions = await plan_with_claude(
-            planner,
-            PlannerInput(
-                day=used_day,
-                price_points=prices,
-                start_soc=current_soc,
-                tariff_ore_per_hour=tariff_24h_bootstrap,
-                pv_weather_factor_24h=weather_factors,
-            )
+        now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+        data = PlannerInput(
+            day=used_day,
+            price_points=prices,
+            start_soc=current_soc,
+            tariff_ore_per_hour=tariff_24h_bootstrap,
+            pv_weather_factor_24h=weather_factors,
+            simulation_start_time=now_local if used_day == now_local.date() else None,
         )
-        PlanRepository.replace_plan(day_key, actions)
-        all_actions = PlanRepository.get_plan(day_key)
 
-    if used_day == date.today():
+        manual_overrides: list[PlanAction] = []
+        prepared: dict[int, tuple[list[PlanAction], list[PlanAction], list[PlanAction]]] = {}
+        context_refreshed = False
+
+        def prepare_bootstrap(actions: list[PlanAction]) -> tuple[list[PlanAction], list[PlanAction]]:
+            nonlocal context_refreshed
+            if not context_refreshed:
+                manual_overrides.extend(
+                    action for action in PlanRepository.get_plan(day_key) if action.is_manual_override
+                )
+                data.locally_protected_actions = manual_overrides
+                context_refreshed = True
+            cached = prepared.get(id(actions))
+            if cached is not None and cached[0] is actions:
+                return cached[1], cached[2]
+            effective = PowerBuddyScheduler._dedupe_effective_actions(manual_overrides + actions)
+            actions_to_store = [action for action in effective if not action.is_manual_override]
+            if data.simulation_start_time is not None:
+                boundary = data.simulation_start_time.replace(minute=0, second=0, microsecond=0)
+                effective = [action for action in effective if _naive_ts(action.end_time) > boundary]
+            prepared[id(actions)] = (actions, actions_to_store, effective)
+            return actions_to_store, effective
+
+        selection = await select_plan_with_claude(
+            planner, data, lambda actions: prepare_bootstrap(actions)[1]
+        )
+        actions_to_store, _ = prepare_bootstrap(selection.planned_actions)
+        PlanRepository.replace_plan(day_key, actions_to_store)
+        all_actions = PlanRepository.get_plan(day_key)
+        reconcile_outcome(
+            used_day, claude_action_signatures(selection.planned_actions),
+            PowerBuddyScheduler._dedupe_effective_actions(all_actions),
+        )
+        bootstrap_simulation = (
+            planner.simulate(
+                used_day, selection.comparison_actions, current_soc,
+                pv_weather_factor_24h=weather_factors, simulation_inputs=data.simulation_inputs,
+                simulation_start_time=data.simulation_start_time,
+            )
+            if selection.comparison_actions else []
+        )
+        SimulationRepository.replace_points(day_key, bootstrap_simulation)
+
+    effective_actions = PowerBuddyScheduler._dedupe_effective_actions(all_actions)
+    if bootstrap_simulation is not None:
+        simulation = bootstrap_simulation
+    elif used_day == date.today():
         await _refresh_simulation_for_day(used_day, all_actions)
         simulation = SimulationRepository.get_points(day_key)
     else:
@@ -2190,23 +2271,23 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
         if not simulation:
             simulation = planner.simulate(
                 used_day,
-                all_actions,
+                effective_actions,
                 start_soc=current_soc,
                 pv_weather_factor_24h=weather_factors,
             )
             SimulationRepository.replace_points(day_key, simulation)
 
     price_by_ts = {p.timestamp: p for p in prices}
-    action_by_ts = {a.start_time: a for a in all_actions}
-    sim_by_ts = {s.timestamp: s for s in simulation}
+    action_by_ts = {a.start_time: a for a in effective_actions}
+    simulation_by_hour = _hourly_simulation_values(simulation)
 
     timeline = sorted(price_by_ts.keys())
     labels = [ts.isoformat() for ts in timeline]
     prices_series = [price_by_ts[ts].price_ore_per_kwh if ts in price_by_ts else 0.0 for ts in timeline]
     actions_series = [action_by_ts[ts].action if ts in action_by_ts else "hold" for ts in timeline]
     target_soc_series = [action_by_ts[ts].target_soc if ts in action_by_ts else None for ts in timeline]
-    projected_soc_series = [sim_by_ts[ts].projected_soc if ts in sim_by_ts else None for ts in timeline]
-    projected_grid_series = [sim_by_ts[ts].projected_grid_kwh if ts in sim_by_ts else None for ts in timeline]
+    projected_soc_series = [simulation_by_hour[ts][0] if ts in simulation_by_hour else None for ts in timeline]
+    projected_grid_series = [simulation_by_hour[ts][1] if ts in simulation_by_hour else None for ts in timeline]
 
     # Tariff series aligned with timeline (network tariff indexed by hour; prices sorted by UTC, same order)
     sorted_prices = sorted(prices, key=lambda p: p.timestamp)
@@ -2584,7 +2665,7 @@ async def planning_sanity(target_date: date, auto_fix: bool = False) -> dict[str
 
     planner = DayPlanner()
     day_key = target_date.isoformat()
-    actions = PlanRepository.get_plan(day_key)
+    actions = PowerBuddyScheduler._dedupe_effective_actions(PlanRepository.get_plan(day_key))
     prices, provisional = await _get_day_prices_with_provisional_fallback(target_date)
     if not prices:
         raise HTTPException(status_code=404, detail="No prices available for sanity check")
@@ -2593,6 +2674,9 @@ async def planning_sanity(target_date: date, auto_fix: bool = False) -> dict[str
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(target_date)
     network_tariff = await tariff_service.get_network_tariff_24h()
     tariff_24h = tariff_service.total_tariff_ore_24h(network_tariff)
+    now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    simulation_start_time = now_local if target_date == now_local.date() else None
+    simulation_inputs = planner.capture_simulation_inputs(target_date)
 
     should_fix = bool(auto_fix) and bool(settings.planning_sanity_autofix_enabled)
     updated_actions, report = apply_planning_sanity(
@@ -2604,6 +2688,8 @@ async def planning_sanity(target_date: date, auto_fix: bool = False) -> dict[str
         tariff_ore_per_hour=tariff_24h,
         pv_weather_factor_24h=weather_factors,
         auto_fix=should_fix,
+        simulation_inputs=simulation_inputs,
+        simulation_start_time=simulation_start_time,
     )
 
     changed = bool(report.get("auto_fix_applied"))
@@ -2620,13 +2706,16 @@ async def planning_sanity(target_date: date, auto_fix: bool = False) -> dict[str
                 is_manual_override=action.is_manual_override,
             )
             for action in updated_actions
+            if not action.is_manual_override
         ]
         PlanRepository.replace_plan(day_key, persisted_actions)
         simulation = planner.simulate(
             target_date,
-            PlanRepository.get_plan(day_key),
+            PowerBuddyScheduler._dedupe_effective_actions(PlanRepository.get_plan(day_key)),
             start_soc,
             pv_weather_factor_24h=weather_factors,
+            simulation_inputs=simulation_inputs,
+            simulation_start_time=simulation_start_time,
         )
         SimulationRepository.replace_points(day_key, simulation)
 
@@ -2772,13 +2861,21 @@ async def simulate_plan(target_date: date | None = None) -> list[SimulationPoint
     day = target_date or date.today()
     planner = DayPlanner()
     day_key = day.isoformat()
-    actions = PlanRepository.get_plan(day_key)
+    actions = PowerBuddyScheduler._dedupe_effective_actions(PlanRepository.get_plan(day_key))
     if not actions:
         raise HTTPException(status_code=400, detail="No plan found for requested date")
 
     current_soc = await _resolve_current_soc()
     weather_factors = await weather_forecast_service.get_hourly_pv_factor_24h(day)
-    simulation = planner.simulate(day, actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors)
+    now_local = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
+    simulation_start_time = now_local if day == now_local.date() else None
+    if simulation_start_time is not None:
+        boundary = now_local.replace(minute=0, second=0, microsecond=0)
+        actions = [action for action in actions if _naive_ts(action.end_time) > boundary]
+    simulation = planner.simulate(
+        day, actions, start_soc=current_soc, pv_weather_factor_24h=weather_factors,
+        simulation_start_time=simulation_start_time,
+    )
     SimulationRepository.replace_points(day_key, simulation)
 
     points = SimulationRepository.get_points(day_key)

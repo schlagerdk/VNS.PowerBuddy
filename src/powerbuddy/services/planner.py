@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import json
@@ -8,6 +9,28 @@ from zoneinfo import ZoneInfo
 from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint, SimulationPoint
 from powerbuddy.repositories import PowerRepository
+
+
+WINTER_CHEAP_CHARGE_REASON = "winter cheap-hour charging floor"
+
+
+def is_winter_charge_floor(action: PlanAction) -> bool:
+    return action.action == "charge" and any(
+        reason.removeprefix("provisional fallback: ") == WINTER_CHEAP_CHARGE_REASON
+        for reason in (action.reason or "").split("; ")
+    )
+
+
+def is_protected_action(action: PlanAction, protected_starts: set[datetime]) -> bool:
+    start = action.start_time.replace(tzinfo=None) if action.start_time.tzinfo else action.start_time
+    return bool(action.is_manual_override) or start in protected_starts
+
+
+@dataclass(frozen=True, slots=True)
+class SimulationInputs:
+    expected_daily_consumption_kwh: float
+    hourly_consumption_profile: tuple[float, ...]
+    hourly_pv_profile_kwh: tuple[float, ...]
 
 
 @dataclass(slots=True)
@@ -20,6 +43,9 @@ class PlannerInput:
     tariff_ore_per_hour: list[float] | None = None
     # Optional weather scaling for PV forecast (24 local-hour factors).
     pv_weather_factor_24h: list[float] | None = None
+    locally_protected_actions: list[PlanAction] | None = None
+    simulation_inputs: SimulationInputs | None = None
+    simulation_start_time: datetime | None = None
 
 
 class DayPlanner:
@@ -120,6 +146,16 @@ class DayPlanner:
             return ([0.0] * 24), "none"
         return profile, "historical-hourly-pv"
 
+    def capture_simulation_inputs(self, reference_day: date) -> SimulationInputs:
+        daily_consumption, _ = self.resolve_expected_daily_consumption(reference_day)
+        consumption_profile, _ = self.resolve_hourly_consumption_profile(reference_day)
+        pv_profile, _ = self.resolve_hourly_pv_profile(reference_day)
+        return SimulationInputs(
+            expected_daily_consumption_kwh=daily_consumption,
+            hourly_consumption_profile=tuple(consumption_profile),
+            hourly_pv_profile_kwh=tuple(pv_profile),
+        )
+
     @staticmethod
     def _cost_ore(grid_kwh: float, price_ore_per_kwh: float, tariff_ore: float = 0.0) -> float:
         if grid_kwh >= 0:
@@ -156,36 +192,47 @@ class DayPlanner:
         self,
         points: list[PricePoint],
         expected_daily_consumption_kwh: float,
-        hourly_profile: list[float],
-        pv_profile_kwh: list[float],
+        hourly_profile: Sequence[float],
+        pv_profile_kwh: Sequence[float],
         pv_weather_factor_24h: list[float] | None = None,
+        reference_day: date | None = None,
     ) -> list[float]:
         if not points:
             return []
 
-        weights = [max(0.0, hourly_profile[self._local_hour(point.timestamp)]) for point in points]
-        total_weight = sum(weights)
+        day = reference_day or (
+            points[0].timestamp.astimezone(self.timezone).date()
+            if points[0].timestamp.tzinfo else points[0].timestamp.date()
+        )
+        weights = [max(0.0, float(hourly_profile[hour])) for hour in range(24)]
+        day_start = datetime.combine(day, time.min, tzinfo=self.timezone).astimezone(timezone.utc)
+        day_end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=self.timezone).astimezone(timezone.utc)
+        local_hours: list[int] = []
+        cursor = day_start
+        while cursor < day_end:
+            local_hours.append(cursor.astimezone(self.timezone).hour)
+            cursor += timedelta(hours=1)
+        total_weight = sum(weights[hour] for hour in local_hours)
         if total_weight <= 0:
-            gross = [expected_daily_consumption_kwh / max(len(points), 1)] * len(points)
-        else:
-            scale = expected_daily_consumption_kwh / total_weight
-            gross = [weight * scale for weight in weights]
+            weights = [1.0] * 24
+            total_weight = float(len(local_hours))
+        scale = expected_daily_consumption_kwh / total_weight
 
         net: list[float] = []
-        for idx, point in enumerate(points):
+        for point in points:
             hour = self._local_hour(point.timestamp)
             weather_factor = 1.0
             if pv_weather_factor_24h is not None and len(pv_weather_factor_24h) == 24:
                 weather_factor = max(0.0, float(pv_weather_factor_24h[hour]))
             pv = max(0.0, pv_profile_kwh[hour] * weather_factor)
             # Keep sign so negative values represent PV surplus available for battery charging.
-            net.append(gross[idx] - pv)
+            net.append(weights[hour] * scale - pv)
         return net
 
     def _transition(
         self,
         action: str,
-        soc: int,
+        soc: float,
         hourly_net_consumption_kwh: float,
         duration_hours: float = 1.0,
     ) -> tuple[float, float, float]:
@@ -210,16 +257,17 @@ class DayPlanner:
                 solar_surplus_kwh = abs(net_consumption_kwh)
                 max_solar_charge_kwh = min(
                     solar_surplus_kwh,
+                    self.max_charge_kwh * duration,
                     available_room_kwh / max(self.charge_efficiency, 1e-6),
                 )
                 battery_delta = max_solar_charge_kwh * self.charge_efficiency
-                return battery_delta, 0.0, abs(battery_delta)
+                return battery_delta, net_consumption_kwh + max_solar_charge_kwh, abs(battery_delta)
 
             max_delivery_kwh = min(self.max_discharge_kwh * duration, net_consumption_kwh)
             max_delivery_from_soc = available_energy_kwh * self.discharge_efficiency
             delivered_kwh = max(0.0, min(max_delivery_kwh, max_delivery_from_soc))
             battery_delta = -(delivered_kwh / max(self.discharge_efficiency, 1e-6))
-            grid_kwh = max(0.0, net_consumption_kwh - delivered_kwh)
+            grid_kwh = net_consumption_kwh - delivered_kwh
             return battery_delta, grid_kwh, abs(battery_delta)
 
         return 0.0, net_consumption_kwh, 0.0
@@ -243,7 +291,9 @@ class DayPlanner:
         if not points:
             return []
 
-        now_local_naive_raw = datetime.now(self.timezone).replace(tzinfo=None)
+        now_local_naive_raw = data.simulation_start_time or datetime.now(self.timezone).replace(tzinfo=None)
+        if now_local_naive_raw.tzinfo:
+            now_local_naive_raw = now_local_naive_raw.astimezone(self.timezone).replace(tzinfo=None)
         hour_durations: list[float] = []
         for point in points:
             point_ts = point.timestamp.replace(tzinfo=None) if point.timestamp.tzinfo else point.timestamp
@@ -253,15 +303,14 @@ class DayPlanner:
                 duration = max(0.0, min(1.0, (hour_end - now_local_naive_raw).total_seconds() / 3600.0))
             hour_durations.append(duration)
 
-        expected_daily_consumption_kwh, _ = self.resolve_expected_daily_consumption(data.day)
-        hourly_profile, _ = self.resolve_hourly_consumption_profile(data.day)
-        pv_profile_kwh, _ = self.resolve_hourly_pv_profile(data.day)
+        simulation_inputs = data.simulation_inputs or self.capture_simulation_inputs(data.day)
         net_base_kwh = self._hourly_consumption_for_points(
             points=points,
-            expected_daily_consumption_kwh=expected_daily_consumption_kwh,
-            hourly_profile=hourly_profile,
-            pv_profile_kwh=pv_profile_kwh,
+            expected_daily_consumption_kwh=simulation_inputs.expected_daily_consumption_kwh,
+            hourly_profile=simulation_inputs.hourly_consumption_profile,
+            pv_profile_kwh=simulation_inputs.hourly_pv_profile_kwh,
             pv_weather_factor_24h=data.pv_weather_factor_24h,
+            reference_day=data.day,
         )
 
         low_factor = max(0.4, float(settings.scenario_low_factor))
@@ -330,9 +379,14 @@ class DayPlanner:
             expensive_precharge_enabled = False
             cheap_slot_capture_enabled = False
 
+        tariff_levels = [
+            float(data.tariff_ore_per_hour[self._local_hour(point.timestamp)])
+            if data.tariff_ore_per_hour else 0.0
+            for point in points
+        ]
         total_cost_levels = [
-            float(points[idx].price_ore_per_kwh) + (float(data.tariff_ore_per_hour[idx]) if data.tariff_ore_per_hour else 0.0)
-            for idx in range(len(points))
+            float(point.price_ore_per_kwh) + tariff_levels[idx]
+            for idx, point in enumerate(points)
         ]
         auto_expensive_threshold = 0.0
         very_expensive_threshold = 0.0
@@ -462,7 +516,7 @@ class DayPlanner:
 
         for t in range(len(points) - 1, -1, -1):
             price = points[t].price_ore_per_kwh
-            tariff = data.tariff_ore_per_hour[t] if data.tariff_ore_per_hour else 0.0
+            tariff = tariff_levels[t]
             for soc in range(soc_min, soc_max + 1):
                 best_cost = inf
                 best_action = "hold"
@@ -1460,11 +1514,20 @@ class DayPlanner:
                 if forced_indices:
                     trial_cheap_floor = _rebuild_actions_with_forced_charge(
                         forced_indices,
-                        "winter cheap-hour charging floor",
+                        WINTER_CHEAP_CHARGE_REASON,
                         allow_saturated_charge=True,
                     )
                     if trial_cheap_floor is not None:
                         actions = trial_cheap_floor
+
+                # Preserve the selected floor through later sanity and trim passes.
+                for idx in selected_indices:
+                    action = actions[idx]
+                    if action.action == "charge" and not is_winter_charge_floor(action):
+                        action.reason = (
+                            f"{action.reason}; {WINTER_CHEAP_CHARGE_REASON}"
+                            if action.reason else WINTER_CHEAP_CHARGE_REASON
+                        )
 
         return actions
 
@@ -1475,12 +1538,12 @@ class DayPlanner:
         actions: list[PlanAction],
         start_soc: float,
         pv_weather_factor_24h: list[float] | None = None,
+        simulation_inputs: SimulationInputs | None = None,
+        simulation_start_time: datetime | None = None,
     ) -> list[SimulationPoint]:
         soc = max(self.min_soc, min(self.max_soc, start_soc))
         points: list[SimulationPoint] = []
-        expected_daily_consumption_kwh, _ = self.resolve_expected_daily_consumption(day)
-        hourly_profile, _ = self.resolve_hourly_consumption_profile(day)
-        pv_profile_kwh, _ = self.resolve_hourly_pv_profile(day)
+        simulation_inputs = simulation_inputs or self.capture_simulation_inputs(day)
         sorted_actions = sorted(actions, key=lambda x: x.start_time)
 
         hourly_net_consumption = self._hourly_consumption_for_points(
@@ -1494,40 +1557,62 @@ class DayPlanner:
                 )
                 for action in sorted_actions
             ],
-            expected_daily_consumption_kwh=expected_daily_consumption_kwh,
-            hourly_profile=hourly_profile,
-            pv_profile_kwh=pv_profile_kwh,
+            expected_daily_consumption_kwh=simulation_inputs.expected_daily_consumption_kwh,
+            hourly_profile=simulation_inputs.hourly_consumption_profile,
+            pv_profile_kwh=simulation_inputs.hourly_pv_profile_kwh,
             pv_weather_factor_24h=pv_weather_factor_24h,
+            reference_day=day,
         )
 
         for idx, action in enumerate(sorted_actions):
-            consumption_kwh = hourly_net_consumption[idx] if idx < len(hourly_net_consumption) else 0.0
+            start = action.start_time
+            end = action.end_time
+            if start.tzinfo and end.tzinfo:
+                start = start.astimezone(timezone.utc)
+                end = end.astimezone(timezone.utc)
+                if simulation_start_time is not None:
+                    as_of = simulation_start_time
+                    if as_of.tzinfo is None:
+                        as_of = as_of.replace(tzinfo=self.timezone)
+                    start = max(start, as_of.astimezone(timezone.utc))
+            elif simulation_start_time is not None:
+                as_of = simulation_start_time
+                if as_of.tzinfo:
+                    as_of = as_of.astimezone(self.timezone).replace(tzinfo=None)
+                start = max(start, as_of)
+            duration = max(0.0, min(1.0, (end - start).total_seconds() / 3600.0))
+            hourly_consumption = hourly_net_consumption[idx]
+            consumption_kwh = hourly_consumption * duration
             soc_before = soc
-            soc_int = int(round(soc_before))
 
-            if action.action == "charge":
+            if duration > 0.0 and action.action == "charge":
                 if action.charge_power_w is not None:
-                    grid_charge_kwh = min(self.max_charge_kwh, max(0.0, float(action.charge_power_w) / 1000.0))
+                    grid_charge_kwh = min(
+                        self.max_charge_kwh, max(0.0, float(action.charge_power_w) / 1000.0)
+                    ) * duration
                     delta_soc = (grid_charge_kwh * self.charge_efficiency / self.capacity_kwh) * 100.0
                     soc = min(self.max_soc, soc + delta_soc)
-                    projected_grid_kwh = consumption_kwh + grid_charge_kwh
                 else:
-                    delta_battery, projected_grid_kwh, _ = self._transition("charge", soc_int, consumption_kwh)
+                    delta_battery, _, _ = self._transition(
+                        "charge", soc_before, hourly_consumption, duration_hours=duration
+                    )
                     soc = max(self.min_soc, min(self.max_soc, soc + (delta_battery / self.capacity_kwh) * 100.0))
-            elif action.action in {"auto", "discharge"}:
-                delta_battery, projected_grid_kwh, _ = self._transition("discharge", soc_int, consumption_kwh)
+            elif duration > 0.0 and action.action in {"auto", "discharge", "discharge_force"}:
+                transition_action = "discharge" if action.action == "discharge_force" else action.action
+                delta_battery, _, _ = self._transition(
+                    transition_action, soc_before, hourly_consumption, duration_hours=duration
+                )
                 soc = max(self.min_soc, min(self.max_soc, soc + (delta_battery / self.capacity_kwh) * 100.0))
-            else:
-                projected_grid_kwh = consumption_kwh
-
-            if action.target_soc is not None:
-                soc = max(self.min_soc, min(self.max_soc, float(action.target_soc), soc))
 
             actual_battery_delta_kwh = ((soc - soc_before) / 100.0) * self.capacity_kwh
             if action.action == "hold":
                 projected_grid = consumption_kwh
             elif action.action == "charge":
-                projected_grid = max(0.0, consumption_kwh + (actual_battery_delta_kwh / max(self.charge_efficiency, 1e-6)))
+                grid_charge = max(0.0, actual_battery_delta_kwh) / max(self.charge_efficiency, 1e-6)
+                projected_grid = consumption_kwh + grid_charge
+            elif consumption_kwh < 0:
+                solar_charge = max(0.0, actual_battery_delta_kwh) / max(self.charge_efficiency, 1e-6)
+                projected_grid = min(0.0, consumption_kwh + solar_charge)
             else:
                 delivered = max(0.0, -actual_battery_delta_kwh * self.discharge_efficiency)
                 projected_grid = max(0.0, consumption_kwh - delivered)
@@ -1564,11 +1649,21 @@ class DayPlanner:
         pv_weather_factor_24h: list[float] | None = None,
         price_points: list[PricePoint] | None = None,
         tariff_ore_per_hour: list[float] | None = None,
+        simulation_inputs: SimulationInputs | None = None,
+        simulation_start_time: datetime | None = None,
+        protected_action_starts: set[datetime] | None = None,
     ) -> list[PlanAction]:
         if not actions:
             return actions
 
         sorted_actions = sorted(actions, key=lambda a: a.start_time)
+        protected_starts = {
+            start.replace(tzinfo=None) if start.tzinfo else start
+            for start in (protected_action_starts or set())
+        }
+
+        def _protected(action: PlanAction) -> bool:
+            return is_protected_action(action, protected_starts)
 
         def _simulate(actions_input: list[PlanAction]) -> list[SimulationPoint]:
             return self.simulate(
@@ -1576,6 +1671,8 @@ class DayPlanner:
                 actions_input,
                 start_soc=start_soc,
                 pv_weather_factor_24h=pv_weather_factor_24h,
+                simulation_inputs=simulation_inputs,
+                simulation_start_time=simulation_start_time,
             )
 
         def _clone_actions(actions_input: list[PlanAction]) -> list[PlanAction]:
@@ -1625,7 +1722,7 @@ class DayPlanner:
         soc_before = max(self.min_soc, min(self.max_soc, float(start_soc)))
         trimmed = False
         for idx, action in enumerate(sorted_actions):
-            if action.action != "charge" or action.is_manual_override:
+            if action.action != "charge" or _protected(action) or is_winter_charge_floor(action):
                 if idx < len(simulation):
                     soc_before = float(simulation[idx].projected_soc)
                 continue
@@ -1658,7 +1755,7 @@ class DayPlanner:
 
             removed = False
             for idx, action in enumerate(sorted_actions):
-                if action.action != "charge" or action.is_manual_override:
+                if action.action != "charge" or _protected(action) or is_winter_charge_floor(action):
                     continue
 
                 # Don't convert charge to hold in overnight window
@@ -1711,7 +1808,9 @@ class DayPlanner:
                 candidates = [
                     idx
                     for idx, action in enumerate(sorted_actions)
-                    if action.action == "charge" and not action.is_manual_override
+                    if action.action == "charge"
+                    and not _protected(action)
+                    and not is_winter_charge_floor(action)
                 ]
                 candidates = sorted(
                     candidates,
@@ -1748,12 +1847,14 @@ class DayPlanner:
                 charge_candidates = [
                     idx
                     for idx, action in enumerate(sorted_actions)
-                    if action.action == "charge" and not action.is_manual_override
+                    if action.action == "charge"
+                    and not _protected(action)
+                    and not is_winter_charge_floor(action)
                 ]
                 hold_candidates = [
                     idx
                     for idx, action in enumerate(sorted_actions)
-                    if action.action == "hold" and not action.is_manual_override
+                    if action.action == "hold" and not _protected(action)
                 ]
 
                 charge_candidates = sorted(
@@ -1807,8 +1908,7 @@ class DayPlanner:
                 if not shifted_any:
                     break
 
-        # Hard cap: never keep more non-manual charge hours than what battery room
-        # can physically absorb from start_soc (manual overrides are preserved).
+        # Cap optional charge hours by battery room; preserve manual and winter-floor slots.
         per_hour_charge_kwh = max(0.0, self.max_charge_kwh * self.charge_efficiency)
         if per_hour_charge_kwh > 1e-9:
             import math
@@ -1828,16 +1928,23 @@ class DayPlanner:
                 if action.action == "charge" and not action.is_manual_override
             ]
 
-            allowed_non_manual = max(0, max_total_charge_hours - len(manual_charge_indices))
-            if len(non_manual_charge_indices) > allowed_non_manual:
+            required_indices = {
+                idx for idx in non_manual_charge_indices
+                if is_winter_charge_floor(sorted_actions[idx]) or _protected(sorted_actions[idx])
+            }
+            optional_indices = [idx for idx in non_manual_charge_indices if idx not in required_indices]
+            allowed_optional = max(
+                0, max_total_charge_hours - len(manual_charge_indices) - len(required_indices)
+            )
+            if len(optional_indices) > allowed_optional:
                 keep_non_manual = set(
                     sorted(
-                        non_manual_charge_indices,
+                        optional_indices,
                         key=lambda idx: _slot_total_price_ore(self._local_hour(sorted_actions[idx].start_time)),
-                    )[:allowed_non_manual]
+                    )[:allowed_optional]
                 )
 
-                for idx in non_manual_charge_indices:
+                for idx in optional_indices:
                     if idx in keep_non_manual:
                         continue
                     # Don't convert charge to hold in overnight window
@@ -1854,7 +1961,7 @@ class DayPlanner:
         # FINAL PASS: Eliminate all hold actions in overnight window (20:00-08:00)
         # This is a safety net to ensure no nighttime holds escape from earlier optimizations
         for idx, action in enumerate(sorted_actions):
-            if action.action == "hold":
+            if action.action == "hold" and not _protected(action):
                 local_hour = self._local_hour(action.start_time)
                 if local_hour >= 20 or local_hour < 8:
                     action.action = "auto"
@@ -1865,9 +1972,8 @@ class DayPlanner:
 
         # FINAL PASS 2: Eliminate illogical hold immediately after charge (within 2 hours)
         # Holding within 2 hours of charging makes no economic sense; should either keep charging, discharge, or auto
-        debug_log = []
         for idx, action in enumerate(sorted_actions):
-            if action.action == "hold":
+            if action.action == "hold" and not _protected(action):
                 # Check if this hold is within 2 hours after a charge period
                 is_after_recent_charge = False
                 for prev_idx in range(max(0, idx - 2), idx):
@@ -1875,21 +1981,11 @@ class DayPlanner:
                         is_after_recent_charge = True
                         break
 
-                local_hour = self._local_hour(action.start_time)
-                debug_log.append("HOLD at hour {} (idx {}): after_recent_charge={}".format(local_hour, idx, is_after_recent_charge))
-
                 if is_after_recent_charge:
-                    debug_log.append("  -> Converting to AUTO")
                     action.action = "auto"
                     action.charge_power_w = None
                     action.target_soc = None
                     action.reason = "post-charge illogical hold removed: converted to auto"
                     trimmed = True
-
-        # Write debug log for offline analysis
-        if debug_log:
-            with open("/tmp/planner_debug.log", "a") as f:
-                for line in debug_log:
-                    f.write(line + "\n")
 
         return sorted_actions

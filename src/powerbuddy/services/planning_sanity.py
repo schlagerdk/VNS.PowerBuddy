@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint
-from powerbuddy.services.planner import DayPlanner
+from powerbuddy.services.planner import DayPlanner, SimulationInputs, is_protected_action, is_winter_charge_floor
 
 
 def _quantile(values: list[float], q: float) -> float:
@@ -29,6 +29,8 @@ def _simulate_soc_by_index(
 	actions: list[PlanAction],
 	start_soc: float,
 	pv_weather_factor_24h: list[float] | None,
+	simulation_inputs: SimulationInputs | None,
+	simulation_start_time: datetime | None,
 ) -> list[float]:
 	if not actions:
 		return []
@@ -37,6 +39,8 @@ def _simulate_soc_by_index(
 		actions,
 		start_soc=start_soc,
 		pv_weather_factor_24h=pv_weather_factor_24h,
+		simulation_inputs=simulation_inputs,
+		simulation_start_time=simulation_start_time,
 	)
 	return [float(point.projected_soc) for point in simulation]
 
@@ -50,6 +54,10 @@ def apply_planning_sanity(
 	tariff_ore_per_hour: list[float] | None = None,
 	pv_weather_factor_24h: list[float] | None = None,
 	auto_fix: bool = True,
+	protected_charge_starts: set[datetime] | None = None,
+	protected_action_starts: set[datetime] | None = None,
+	simulation_inputs: SimulationInputs | None = None,
+	simulation_start_time: datetime | None = None,
 ) -> tuple[list[PlanAction], dict[str, object]]:
 	report: dict[str, object] = {
 		"day": day.isoformat(),
@@ -68,6 +76,14 @@ def apply_planning_sanity(
 		report["findings"] = ["No actions or prices available for sanity check"]
 		report["ok"] = False
 		return actions, report
+
+	protected_actions = {
+		start.replace(tzinfo=None) if start.tzinfo else start
+		for start in (protected_action_starts or set())
+	}
+
+	def _protected(action: PlanAction) -> bool:
+		return is_protected_action(action, protected_actions)
 
 	price_by_hour = {int(point.timestamp.hour): float(point.price_ore_per_kwh) for point in prices}
 	total_levels: list[float] = []
@@ -117,8 +133,14 @@ def apply_planning_sanity(
 		report["ok"] = True
 		return actions, report
 
+	def _simulate_soc() -> list[float]:
+		return _simulate_soc_by_index(
+			planner, day, actions, start_soc, pv_weather_factor_24h,
+			simulation_inputs, simulation_start_time,
+		)
+
 	first_expensive_idx = min(expensive_indices)
-	sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+	sim_soc = _simulate_soc()
 	target_soc_base = max(
 		float(settings.reserve_soc_min_percent),
 		float(settings.must_charge_window_min_soc_percent),
@@ -131,9 +153,10 @@ def apply_planning_sanity(
 	pv_credit_soc = 0.0
 	pv_surplus_kwh = 0.0
 	if bool(settings.planning_sanity_pv_credit_enabled) and first_expensive_idx > 0:
-		expected_daily_consumption_kwh, _ = planner.resolve_expected_daily_consumption(day)
-		hourly_profile, _ = planner.resolve_hourly_consumption_profile(day)
-		pv_profile_kwh, _ = planner.resolve_hourly_pv_profile(day)
+		forecast = simulation_inputs or planner.capture_simulation_inputs(day)
+		expected_daily_consumption_kwh = forecast.expected_daily_consumption_kwh
+		hourly_profile = forecast.hourly_consumption_profile
+		pv_profile_kwh = forecast.hourly_pv_profile_kwh
 		for idx in range(first_expensive_idx):
 			hour = int(actions[idx].start_time.hour)
 			if hour < 0 or hour > 23:
@@ -214,7 +237,7 @@ def apply_planning_sanity(
 			idx
 			for idx in valid_indices
 			if idx < first_expensive_idx
-			and not actions[idx].is_manual_override
+			and not _protected(actions[idx])
 			and (not planner._is_reserve_hour(actions[idx].start_time))
 		]
 
@@ -232,7 +255,7 @@ def apply_planning_sanity(
 				first_cheap_idx = min(cheap_indices)
 				min_delta = max(0.0, float(settings.planning_sanity_precheap_auto_min_delta_ore))
 				soc_buffer = max(0.0, float(settings.planning_sanity_precheap_auto_soc_buffer_percent))
-				sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+				sim_soc = _simulate_soc()
 
 				for idx in pre_exp_indices:
 					if idx >= first_cheap_idx:
@@ -256,7 +279,7 @@ def apply_planning_sanity(
 					actions[idx].reason = "sanity autofix: pre-cheap arbitrage auto"
 					precheap_forced_auto_indices.append(idx)
 					changes += 1
-					sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+					sim_soc = _simulate_soc()
 
 				# Re-fill only as needed in cheap slots so we hit target SOC before expensive window.
 				cheap_by_price = sorted(cheap_indices, key=lambda idx: _slot_total_cost(idx))
@@ -274,7 +297,7 @@ def apply_planning_sanity(
 					precheap_forced_charge_indices.append(idx)
 					added_charge += 1
 					changes += 1
-					sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+					sim_soc = _simulate_soc()
 
 	if auto_fix and findings:
 		# Priority 1: ensure enough SOC before expensive window by charging cheapest pre-expensive hours.
@@ -285,7 +308,7 @@ def apply_planning_sanity(
 				for idx in valid_indices
 				if idx < first_expensive_idx
 				and actions[idx].action != "charge"
-				and not actions[idx].is_manual_override
+				and not _protected(actions[idx])
 				and (not planner._is_reserve_hour(actions[idx].start_time))
 			]
 			pre_candidates = sorted(pre_candidates, key=lambda i: price_by_hour.get(int(actions[i].start_time.hour), 0.0))
@@ -307,26 +330,29 @@ def apply_planning_sanity(
 				actions[idx].charge_power_w = planner.charge_setpoint_w
 				actions[idx].reason = "sanity autofix: ensure target SOC before expensive window"
 				changes += 1
-				sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+				sim_soc = _simulate_soc()
 				soc_before_expensive = _soc_before(first_expensive_idx, start_soc, sim_soc)
 				if soc_before_expensive + 1e-6 >= target_soc:
 					break
 
 		# Priority 2: improve expensive-window auto coverage when battery is comfortably above reserve.
-		sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+		sim_soc = _simulate_soc()
 		for idx in expensive_indices:
-			if actions[idx].action != "hold" or actions[idx].is_manual_override:
+			if actions[idx].action != "hold" or _protected(actions[idx]):
 				continue
 			actions[idx].action = "auto"
 			actions[idx].charge_power_w = None
 			actions[idx].reason = "sanity autofix: avoid hold in expensive window"
 			changes += 1
-			sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+			sim_soc = _simulate_soc()
 
-	# Seasonal cap on non-manual/non-reserve grid charge slots.
-	# Summer: very restrictive. Non-summer: keep at most 5 cheapest charge hours.
+	# Seasonal cap on optional charge slots; required winter and protected slots win.
 	if auto_fix:
 		max_charge_slots = 2 if is_summer_period else 5
+		protected_starts = {
+			start.replace(tzinfo=None) if start.tzinfo else start
+			for start in (protected_charge_starts or set())
+		}
 		charge_candidates = [
 			idx
 			for idx in valid_indices
@@ -338,6 +364,10 @@ def apply_planning_sanity(
 			for idx in sorted(charge_candidates, key=_slot_total_cost, reverse=True):
 				if len(charge_candidates) <= max_charge_slots:
 					break
+				start = actions[idx].start_time
+				start = start.replace(tzinfo=None) if start.tzinfo else start
+				if is_winter_charge_floor(actions[idx]) or start in protected_starts or _protected(actions[idx]):
+					continue
 				actions[idx].action = "auto"
 				actions[idx].charge_power_w = None
 				actions[idx].reason = "sanity autofix: seasonal charge-slot cap"
@@ -345,9 +375,11 @@ def apply_planning_sanity(
 				charge_candidates.remove(idx)
 
 	# Refresh charge target SOC hints from simulation after all changes.
-	sim_soc = _simulate_soc_by_index(planner, day, actions, start_soc, pv_weather_factor_24h)
+	sim_soc = _simulate_soc()
 	for idx, action in enumerate(actions):
 		if idx >= len(sim_soc):
+			continue
+		if _protected(action):
 			continue
 		if action.action == "charge":
 			action.target_soc = round(float(sim_soc[idx]), 1)

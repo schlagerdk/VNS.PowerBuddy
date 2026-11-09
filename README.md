@@ -57,7 +57,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.19`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.20`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -137,6 +137,13 @@ Versioning:
 CI:
 
 - GitHub Actions workflow: `.github/workflows/ci.yml`.
+
+The dashboard modal regression tests use Node.js 18 or newer and need no npm
+packages (Node.js is not required to run the application):
+
+```bash
+node --test tests/dashboard-modals.test.js
+```
 
 ## Deployment Model (Production)
 
@@ -275,9 +282,10 @@ in `.env` (mode 600) without a restart and never sends it back to the browser;
 create plan** always create a new plan through Claude (even when prices are unchanged),
 **Fetch prices now** re-plans the fetched days through Claude, and all three report
 for how many days the AI proposal was accepted. Leave the key empty to
-retain the existing planner unchanged.
+use the local planner without an AI request.
 `POWERBUDDY_CLAUDE_MODEL` defaults to `claude-sonnet-4-6`;
 `POWERBUDDY_CLAUDE_TIMEOUT_SECONDS` defaults to 45 seconds. API calls incur costs.
+Verifying the key and model does not verify available API credit or spending limits.
 Never commit the key. It is masked in settings representations and excluded from
 settings serialization and `/config`.
 
@@ -287,19 +295,44 @@ manual overrides, location, tariffs and other environment settings stay local.
 No call is made for dummy/provisional prices. This is a constrained proposal
 integration, not an autonomous agent with server or inverter access.
 
-The local engine still provides the baseline and validates proposals using the
-existing consumption/solar forecasts, tariffs, battery limits and reserve rules.
-Locally scheduled charge slots (including the winter cheapest-hour floor) are
-preserved, and manual overrides continue to be applied locally. A proposal is
-rejected if its simulated cost, final reserve or expensive-hour grid purchases
-are worse. API errors, timeouts and invalid/rejected proposals produce a warning
-in the service log and use the unchanged existing planner. Accepted proposals
-are also logged. No improvement is guaranteed; local checks and existing plan
-post-processing may alter or reject the proposal.
+The local engine provides the baseline and evaluates both alternatives with the
+same captured consumption and solar forecasts, starting SOC, tariffs and simulation
+start time. Both alternatives go through the same processing used by the relevant
+planning path, including applicable sanity checks, variant selection and trimming.
+The comparison also includes the effective manual and locked actions; overrides
+changed while waiting for Claude are refreshed before local validation. The selected
+processed plan is the one saved and simulated. Locally scheduled charge slots
+(including the winter cheapest-hour floor) are preserved against AI changes, and
+hours containing manual or locked actions, including a manual half-hour, remain
+private and are excluded from AI changes.
+
+The simulation accounts for the actual duration of half-hours and the remaining
+part of an active period. Expected daily consumption is normalized over the entire
+local day, using 23- or 25-hour weights where applicable; solar charging respects
+battery capacity and power limits, and surplus can be exported. Plan `target_soc`
+values are projection hints, not inverter-enforced stops, so they do not artificially
+clamp the simulated battery level. If a complete
+proposal worsens simulated cost, battery reserve or expensive-hour grid purchases,
+a local heuristic tests subsets of its changes against the same constraints. A
+partial proposal is used only if its simulated cost is more than 0.01 øre lower
+and an AI-suggested action survives processing. No extra Claude request or private
+data is needed. If no qualifying subset is found, the local baseline is used.
+Duplicate wall-clock price slots reaching Claude planning fall back to the existing
+planner. The current price store is keyed by wall time and retains only one
+occurrence of a repeated autumn hour.
+
+Local logs record the baseline and proposed objective in øre, including battery
+wear, and the objective of a selected partial proposal. API errors, timeouts and
+invalid/rejected proposals are logged; accepted full or partial proposals are also
+logged. These values are estimates, not a guarantee of the actual bill. The
+heuristic is not guaranteed to find an improvement, and the accepted count is
+corrected if no Claude change survives final processing.
+Known HTTP errors are logged as safe diagnostic categories without logging API
+responses, keys or prompts; unrecognized errors retain only the HTTP status.
 
 - Base value: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH`.
 - Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.
-- In the non-summer season, the planner guarantees the four globally cheapest charge slots plus two additional cheap slots in the overnight window (00:00-05:00 by default). Additional safety or reserve charge slots may still be added when SOC and consumption require them.
+- In the non-summer season, the planner selects the four cheapest available charge slots plus up to two additional cheap slots in the overnight window (00:00-05:00 by default). Current-day replanning only considers the remaining hours. These required slots are protected from automatic sanity and trimming passes; manual overrides still take precedence, and an active charge converts to hold when the battery is full. Additional safety or reserve charge slots may still be added when SOC and consumption require them.
 - Lookback window: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
 - Minimum sample requirement per day: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
 - Seasonal anchoring: when `POWERBUDDY_SEASONAL_ANCHOR_ENABLED=true`, the dynamic value is blended with a monthly reference (`POWERBUDDY_SEASONAL_ANCHOR_MONTHLY_DAILY_KWH_JSON`).

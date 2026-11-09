@@ -2220,17 +2220,7 @@
 			if (logClose) {
 				logClose.addEventListener('click', closeLogModal);
 			}
-			if (logModal) {
-				logModal.addEventListener('click', (event) => {
-					if (event.target === logModal) closeLogModal();
-				});
-			}
 			if (settingsClose) settingsClose.addEventListener('click', closeSettingsModal);
-			if (settingsModal) {
-				settingsModal.addEventListener('click', (event) => {
-					if (event.target === settingsModal) closeSettingsModal();
-				});
-			}
 			if (headerLoginClose) {
 				headerLoginClose.addEventListener('click', closeLoginModal);
 			}
