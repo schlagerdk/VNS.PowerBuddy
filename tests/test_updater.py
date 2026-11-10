@@ -57,12 +57,56 @@ def test_forced_check_refreshes_after_short_throttle(monkeypatch):
     ))
     clock = {"now": 10_000.0}
     monkeypatch.setattr(updater.time, "time", lambda: clock["now"])
-    monkeypatch.setattr(updater, "_cache", {"checked_at": 10_000.0 - 120, "latest": "0.0.1", "url": None, "error": None})
+    monkeypatch.setattr(updater, "_cache", {"checked_at": 10_000.0 - 60, "latest": "0.0.1", "url": None, "error": None})
 
     assert asyncio.run(updater.check_for_update())["latest"] == "0.0.1"
     assert calls == []
     assert asyncio.run(updater.check_for_update(force=True))["latest"] == "99.0.0"
     assert len(calls) == 1
-    clock["now"] += 30
+    clock["now"] += 5
     asyncio.run(updater.check_for_update(force=True))
     assert len(calls) == 1
+
+
+def _mock_github(monkeypatch, responses):
+    seen = []
+    real_client = updater.httpx.AsyncClient
+
+    def handle(request):
+        seen.append(request)
+        return responses.pop(0)
+
+    monkeypatch.setattr(updater.httpx, "AsyncClient", lambda **kwargs: real_client(
+        **kwargs, transport=updater.httpx.MockTransport(handle)
+    ))
+    return seen
+
+
+def test_conditional_request_keeps_release_on_304(monkeypatch):
+    clock = {"now": 50_000.0}
+    monkeypatch.setattr(updater.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(updater, "_cache", {"checked_at": 0.0, "latest": None, "url": None, "error": None})
+    seen = _mock_github(monkeypatch, [
+        updater.httpx.Response(200, json={"tag_name": "v99.0.0", "html_url": "u"}, headers={"etag": 'W/"abc"'}),
+        updater.httpx.Response(304),
+    ])
+    assert asyncio.run(updater.check_for_update(force=True))["latest"] == "99.0.0"
+    assert "if-none-match" not in seen[0].headers
+    clock["now"] += 11
+    status = asyncio.run(updater.check_for_update(force=True))
+    assert seen[1].headers["if-none-match"] == 'W/"abc"'
+    assert status["latest"] == "99.0.0" and status["update_available"] and status["error"] is None
+
+
+def test_rate_limit_backs_off_until_reset(monkeypatch):
+    clock = {"now": 50_000.0}
+    monkeypatch.setattr(updater.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(updater, "_cache", {"checked_at": 0.0, "latest": "1.0.0", "url": None, "error": None})
+    seen = _mock_github(monkeypatch, [updater.httpx.Response(
+        403, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(clock["now"] + 900))},
+    )])
+    status = asyncio.run(updater.check_for_update(force=True))
+    assert status["latest"] == "1.0.0" and status["error"] == "rate limited"
+    clock["now"] += 300
+    asyncio.run(updater.check_for_update(force=True))
+    assert len(seen) == 1

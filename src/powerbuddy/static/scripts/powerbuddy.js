@@ -1725,8 +1725,8 @@
 				if (menuButton) menuButton.classList.toggle('has-update', !!pendingUpdateVersion);
 			}
 
-			async function checkForUpdate(force) {
-				if (!isAuthorized || (updateChecked && !force)) return;
+			async function checkForUpdate(force, background) {
+				if (!isAuthorized || (updateChecked && !force && !background)) return;
 				updateChecked = true;
 				try {
 					renderUpdateButton(await postSettingsAction({ action: 'update-status', force: !!force }));
@@ -1734,6 +1734,14 @@
 					updateChecked = false;
 				}
 			}
+
+			// Long-lived dashboards: keep the menu's update dot current without user action.
+			// The server answers from its cache and only asks GitHub every couple of minutes.
+			const recheckForUpdate = () => {
+				if (!document.hidden && !pendingUpdateVersion) checkForUpdate(false, true);
+			};
+			if (typeof window.setInterval === 'function') window.setInterval(recheckForUpdate, 3 * 60 * 1000);
+			document.addEventListener('visibilitychange', recheckForUpdate);
 
 			async function waitForVersion(target) {
 				const deadline = Date.now() + 10 * 60 * 1000;
