@@ -2867,6 +2867,105 @@
 			transform: translateY(1px);
 		}
 
+		/* Update dialog: same frame as the pause confirmation, green "go" tone. */
+		.pb-update-confirm-modal {
+			z-index: 3000;
+		}
+
+		.pb-update-confirm-modal .pb-control-confirm-actions button[hidden] {
+			display: none;
+		}
+
+		.pb-update-confirm-icon {
+			color: #86efac;
+			background: rgba(22, 101, 52, 0.42);
+			border-color: rgba(74, 222, 128, 0.42);
+		}
+
+		.pb-update-confirm-icon .pb-update-icon-warn,
+		.pb-update-confirm-icon.is-warning .pb-update-icon-ok {
+			display: none;
+		}
+
+		.pb-update-confirm-icon.is-warning .pb-update-icon-warn {
+			display: block;
+		}
+
+		.pb-update-confirm-icon.is-warning {
+			color: #fde68a;
+			background: rgba(113, 63, 18, 0.5);
+			border-color: rgba(250, 204, 21, 0.45);
+		}
+
+		.pb-update-versions {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px;
+		}
+
+		.pb-update-versions[hidden] {
+			display: none;
+		}
+
+		.pb-update-version-chip {
+			display: inline-flex;
+			align-items: center;
+			min-height: 28px;
+			padding: 0 10px;
+			border-radius: 999px;
+			border: 1px solid rgba(148, 163, 184, 0.28);
+			background: rgba(30, 41, 59, 0.74);
+			color: #cbd5e1;
+			font-size: 12px;
+			font-weight: 800;
+			font-variant-numeric: tabular-nums;
+			letter-spacing: 0.02em;
+		}
+
+		.pb-update-version-chip.is-new {
+			color: #dcfce7;
+			border-color: rgba(74, 222, 128, 0.55);
+			background: rgba(22, 101, 52, 0.45);
+		}
+
+		.pb-update-version-arrow {
+			color: #94a3b8;
+			font-weight: 800;
+		}
+
+		.pb-update-notes-link {
+			margin-left: auto;
+			color: #93c5fd;
+			font-size: 12px;
+			font-weight: 700;
+			text-decoration: none;
+		}
+
+		.pb-update-notes-link:hover {
+			text-decoration: underline;
+		}
+
+		.pb-update-notes-link[hidden] {
+			display: none;
+		}
+
+		.pb-update-confirm-btn {
+			border-color: rgba(74, 222, 128, 0.55);
+			background: linear-gradient(135deg, #22c55e 0%, #15803d 100%);
+			color: #f0fdf4;
+		}
+
+		.pb-update-confirm-btn:hover {
+			border-color: rgba(134, 239, 172, 0.75);
+		}
+
+		.pb-update-confirm-modal.is-warning .pb-update-confirm-btn {
+			border-color: rgba(148, 163, 184, 0.52);
+			background: linear-gradient(145deg, rgba(71, 85, 105, 0.88), rgba(30, 41, 59, 0.88));
+			color: #e2e8f0;
+		}
+
 		.bar.low {
 			background: linear-gradient(180deg, var(--cat-low-a) 0%, var(--cat-low-b) 100%);
 			border-color: rgba(54, 209, 165, 0.72);

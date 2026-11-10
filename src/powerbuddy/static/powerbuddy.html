@@ -11,7 +11,7 @@
 	<link rel="icon" type="image/png" sizes="16x16" href="/powerbuddy/static/favicon-16x16.png">
 	<link rel="icon" type="image/x-icon" href="/powerbuddy/static/favicon.ico">
 
-	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20261109h" />
+	<link rel="stylesheet" href="/powerbuddy/static/css/powerbuddy.css?v=20261110a" />
 </head>
 <body class="">
 	<svg xmlns="http://www.w3.org/2000/svg" class="pb-icon-sprite" aria-hidden="true" focusable="false">
@@ -618,6 +618,38 @@
 			<div id="pbUpdateOverlayText" class="pb-update-text"></div>
 		</div>
 	</div>
+	<div id="pbUpdateConfirmModal" class="pb-action-modal pb-update-confirm-modal" aria-hidden="true">
+		<div class="pb-action-modal-card pb-control-confirm-card" role="dialog" aria-modal="true" aria-labelledby="pbUpdateConfirmTitle" aria-describedby="pbUpdateConfirmText">
+			<div class="pb-action-modal-head pb-control-confirm-head">
+				<div class="pb-control-confirm-title-wrap">
+					<div class="pb-control-confirm-kicker">PowerBuddy</div>
+					<div id="pbUpdateConfirmTitle" class="pb-action-modal-title">{{t:menu.updateTitle}}</div>
+				</div>
+				<button id="pbUpdateConfirmClose" type="button" class="pb-action-modal-close" aria-label="{{t:common.close}}">&times;</button>
+			</div>
+			<div class="pb-action-modal-body pb-control-confirm-body">
+				<div class="pb-control-confirm-hero">
+					<div id="pbUpdateConfirmIcon" class="pb-control-confirm-icon pb-update-confirm-icon" aria-hidden="true">
+						<svg class="pb-update-icon-ok" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M8 1.5a.9.9 0 0 1 .9.9v6.4l2.1-2.1a.9.9 0 1 1 1.27 1.27L8.64 11.6a.9.9 0 0 1-1.28 0L3.73 7.97A.9.9 0 1 1 5 6.7l2.1 2.1V2.4a.9.9 0 0 1 .9-.9ZM2.5 12.6a.9.9 0 0 1 .9.9v.1h9.2v-.1a.9.9 0 1 1 1.8 0v1a.9.9 0 0 1-.9.9h-11a.9.9 0 0 1-.9-.9v-1a.9.9 0 0 1 .9-.9Z"></path></svg>
+						<svg class="pb-update-icon-warn" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M7.13 1.98a1 1 0 0 1 1.74 0l6 10.5A1 1 0 0 1 14 14H2a1 1 0 0 1-.87-1.52l6-10.5ZM8 5.2a.85.85 0 0 0-.85.85v3.3a.85.85 0 1 0 1.7 0v-3.3A.85.85 0 0 0 8 5.2Zm0 6.05a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"></path></svg>
+					</div>
+					<div class="pb-control-confirm-copy">
+						<div id="pbUpdateConfirmText" class="pb-control-confirm-text"></div>
+					</div>
+				</div>
+				<div id="pbUpdateConfirmVersions" class="pb-update-versions">
+					<span id="pbUpdateConfirmFrom" class="pb-update-version-chip"></span>
+					<span class="pb-update-version-arrow" aria-hidden="true">→</span>
+					<span id="pbUpdateConfirmTo" class="pb-update-version-chip is-new"></span>
+					<a id="pbUpdateConfirmNotes" class="pb-update-notes-link" href="#" target="_blank" rel="noopener" hidden>{{t:menu.updateNotes}}</a>
+				</div>
+				<div class="pb-control-confirm-actions">
+					<button id="pbUpdateConfirmCancel" type="button" class="pb-discharge-confirm-btn cancel">{{t:common.cancel}}</button>
+					<button id="pbUpdateConfirmContinue" type="button" class="pb-control-confirm-btn pb-update-confirm-btn">{{t:menu.updateNow}}</button>
+				</div>
+			</div>
+		</div>
+	</div>
 	<div id="pbControlConfirmModal" class="pb-action-modal pb-control-confirm-modal" aria-hidden="true">
 		<div class="pb-action-modal-card pb-control-confirm-card" role="dialog" aria-modal="true" aria-labelledby="pbControlConfirmTitle">
 			<div class="pb-action-modal-head pb-control-confirm-head">
@@ -648,6 +680,6 @@
 			</div>
 		</div>
 	</div>
-	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20261109h"></script>
+	<script src="/powerbuddy/static/scripts/powerbuddy.js?v=20261110a"></script>
 </body>
 </html>

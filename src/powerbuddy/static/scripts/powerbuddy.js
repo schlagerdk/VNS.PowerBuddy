@@ -1600,7 +1600,111 @@
 			const updateOverlayText = document.getElementById('pbUpdateOverlayText');
 			const runningVersion = menuVersion ? (menuVersion.getAttribute('data-version') || '') : '';
 			let pendingUpdateVersion = '';
+			let pendingReleaseUrl = '';
 			let updateChecked = false;
+			const updateConfirmModal = document.getElementById('pbUpdateConfirmModal');
+			const updateConfirmTitle = document.getElementById('pbUpdateConfirmTitle');
+			const updateConfirmText = document.getElementById('pbUpdateConfirmText');
+			const updateConfirmIcon = document.getElementById('pbUpdateConfirmIcon');
+			const updateConfirmVersions = document.getElementById('pbUpdateConfirmVersions');
+			const updateConfirmFrom = document.getElementById('pbUpdateConfirmFrom');
+			const updateConfirmTo = document.getElementById('pbUpdateConfirmTo');
+			const updateConfirmNotes = document.getElementById('pbUpdateConfirmNotes');
+			const updateConfirmClose = document.getElementById('pbUpdateConfirmClose');
+			const updateConfirmCancel = document.getElementById('pbUpdateConfirmCancel');
+			const updateConfirmContinue = document.getElementById('pbUpdateConfirmContinue');
+			let updateDialogPending = null;
+
+			function safeReleaseUrl(value) {
+				try {
+					const url = new URL(String(value || ''));
+					return url.protocol === 'https:' && url.hostname === 'github.com' ? url.toString() : '';
+				} catch (_) {
+					return '';
+				}
+			}
+
+			// Styled replacement for window.confirm/alert in the update flow.
+			// options: { title, text, from, to, confirmLabel, showCancel, tone: 'update' | 'warning' }
+			function showUpdateDialog(options) {
+				const opts = options || {};
+				const fallback = [opts.title, opts.text].filter(Boolean).join('\n\n');
+				if (!updateConfirmModal || !updateConfirmTitle || !updateConfirmText || !updateConfirmContinue || !updateConfirmCancel || !updateConfirmClose) {
+					if (opts.showCancel) return Promise.resolve(window.confirm(fallback));
+					window.alert(fallback);
+					return Promise.resolve(true);
+				}
+				if (updateDialogPending) return updateDialogPending;
+
+				const warning = opts.tone === 'warning';
+				updateConfirmModal.classList.toggle('is-warning', warning);
+				updateConfirmTitle.textContent = opts.title || '';
+				updateConfirmText.textContent = opts.text || '';
+				updateConfirmContinue.textContent = opts.confirmLabel || pbT('common.close');
+				updateConfirmCancel.hidden = !opts.showCancel;
+				if (updateConfirmIcon) updateConfirmIcon.classList.toggle('is-warning', warning);
+				const showVersions = !!(opts.from && opts.to);
+				if (updateConfirmVersions) updateConfirmVersions.hidden = !showVersions;
+				if (updateConfirmFrom) updateConfirmFrom.textContent = opts.from ? `v${opts.from}` : '';
+				if (updateConfirmTo) updateConfirmTo.textContent = opts.to ? `v${opts.to}` : '';
+				if (updateConfirmNotes) {
+					const notesUrl = showVersions ? safeReleaseUrl(pendingReleaseUrl) : '';
+					updateConfirmNotes.hidden = !notesUrl;
+					updateConfirmNotes.href = notesUrl || '#';
+				}
+
+				const previousFocus = document.activeElement;
+				updateConfirmModal.classList.add('open');
+				updateConfirmModal.setAttribute('aria-hidden', 'false');
+				document.body.style.overflow = 'hidden';
+				document.body.classList.add('pb-modal-open');
+				(opts.showCancel ? updateConfirmCancel : updateConfirmContinue).focus();
+
+				updateDialogPending = new Promise((resolve) => {
+					const finish = (result) => {
+						updateConfirmClose.removeEventListener('click', onCancel);
+						updateConfirmCancel.removeEventListener('click', onCancel);
+						updateConfirmContinue.removeEventListener('click', onContinue);
+						updateConfirmModal.removeEventListener('click', onBackdrop);
+						document.removeEventListener('keydown', onKeydown);
+						updateConfirmModal.classList.remove('open');
+						updateConfirmModal.setAttribute('aria-hidden', 'true');
+						document.body.style.overflow = '';
+						document.body.classList.remove('pb-modal-open');
+						updateDialogPending = null;
+						if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+						resolve(result);
+					};
+					const onCancel = () => finish(!opts.showCancel);
+					const onContinue = () => finish(true);
+					const onBackdrop = (event) => {
+						if (event.target === updateConfirmModal) onCancel();
+					};
+					const onKeydown = (event) => {
+						if (event.key === 'Escape') {
+							event.preventDefault();
+							onCancel();
+						}
+					};
+					updateConfirmClose.addEventListener('click', onCancel);
+					updateConfirmCancel.addEventListener('click', onCancel);
+					updateConfirmContinue.addEventListener('click', onContinue);
+					updateConfirmModal.addEventListener('click', onBackdrop);
+					document.addEventListener('keydown', onKeydown);
+				});
+				return updateDialogPending;
+			}
+
+			function showUpdateProblem(kind, detail) {
+				const failed = kind === 'failed';
+				return showUpdateDialog({
+					title: pbT(failed ? 'menu.updateFailedTitle' : 'menu.updateTimeoutTitle'),
+					text: pbT(failed ? 'menu.updateFailed' : 'menu.updateTimeout') + (detail ? ` (${detail})` : ''),
+					confirmLabel: pbT('common.close'),
+					showCancel: false,
+					tone: 'warning',
+				});
+			}
 
 			function showUpdateOverlay(text) {
 				if (updateOverlayText) updateOverlayText.textContent = text;
@@ -1609,6 +1713,7 @@
 
 			function renderUpdateButton(data) {
 				pendingUpdateVersion = data && data.update_available ? String(data.latest || '') : '';
+				pendingReleaseUrl = data && data.release_url ? String(data.release_url) : '';
 				if (updateButton) {
 					updateButton.hidden = !pendingUpdateVersion;
 					updateButton.disabled = false;
@@ -1648,8 +1753,17 @@
 			async function installUpdate() {
 				const target = pendingUpdateVersion;
 				if (!target) return;
-				if (!window.confirm(pbT('menu.updateConfirm', { from: runningVersion, to: target }))) return;
 				closeMenuPanel();
+				const confirmed = await showUpdateDialog({
+					title: pbT('menu.updateTitle'),
+					text: pbT('menu.updateConfirm', { from: runningVersion, to: target }),
+					from: runningVersion,
+					to: target,
+					confirmLabel: pbT('menu.updateNow'),
+					showCancel: true,
+					tone: 'update',
+				});
+				if (!confirmed) return;
 				if (updateButton) updateButton.disabled = true;
 				showUpdateOverlay(pbT('menu.updating', { from: runningVersion, to: target }));
 				try {
@@ -1657,7 +1771,7 @@
 				} catch (error) {
 					if (updateOverlay) updateOverlay.hidden = true;
 					if (updateButton) updateButton.disabled = false;
-					window.alert(pbT('menu.updateFailed') + (error && error.message ? ` (${error.message})` : ''));
+					await showUpdateProblem('failed', error && error.message ? error.message : '');
 					return;
 				}
 				const result = await waitForVersion(target);
@@ -1668,7 +1782,7 @@
 				}
 				if (updateOverlay) updateOverlay.hidden = true;
 				if (updateButton) updateButton.disabled = false;
-				window.alert(pbT(result === 'failed' ? 'menu.updateFailed' : 'menu.updateTimeout'));
+				await showUpdateProblem(result === 'failed' ? 'failed' : 'timeout');
 			}
 
 			if (updateButton) updateButton.addEventListener('click', installUpdate);

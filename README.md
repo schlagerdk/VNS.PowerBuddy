@@ -58,7 +58,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.22`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.23`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
