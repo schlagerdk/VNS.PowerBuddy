@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint, SimulationPoint
+from powerbuddy.repositories import KPIRepository
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.planning_sanity import apply_planning_sanity
 
@@ -104,7 +105,7 @@ async def verify_api_key(api_key: str) -> dict[str, object]:
     return {"valid": True, "model_available": settings.claude_model in ids}
 
 
-_SYSTEM = """Propose an hourly battery schedule from public spot prices and general rules.
+_SYSTEM_PUBLIC = """Propose an hourly battery schedule from public spot prices and general rules.
 Use charge for cheap grid charging, auto for normal solar/battery operation, and hold
 to preserve stored energy for more expensive hours. Minimize electricity cost; avoid
 unnecessary charging or holding. In winter, charge the cheapest hours plus additional
@@ -112,6 +113,30 @@ cheap overnight hours as specified in the rules. Return every supplied slot exac
 once, using its slot index. You have no private household data. A local engine will
 apply consumption, solar forecasts, tariffs, state of charge and safety constraints.
 Call submit_plan with your proposal. Do not request private data or invoke other tools."""
+
+_SYSTEM_HOUSEHOLD = """You plan a home battery for one day, hour by hour, to minimize the household's
+total electricity cost. Actions per slot:
+- auto: normal self-consumption; solar surplus charges the battery and the battery
+  covers household load (net consumption) down to min SOC.
+- charge: force grid charging at max_charge_kw (plus the hour's load from the grid).
+- hold: keep the battery idle; household load is bought from the grid, solar surplus
+  is exported or still stored.
+Import cost per kWh = (spot + tariff) * vat_factor; exported energy earns
+feed_in_ore_per_kwh. Every kWh moved through the battery costs
+degradation_ore_per_kwh, and charging/discharging lose energy (efficiencies).
+
+The payload contains per-slot spot price, grid tariff, expected household consumption
+and expected solar production (both kWh, derived from the household's own history and
+a weather forecast), the battery's start SOC and limits, the local planner's plan with
+its projected SOC, and recent days' KPIs showing how good past forecasts were.
+Use this to: charge only when the price spread to later expensive hours covers losses
+and wear and the energy will actually be needed (account for expected solar); hold
+energy when it is worth more in later expensive hours than now; keep the reserve SOC
+during the reserve window; avoid ending the day with less energy than the local plan.
+Slots marked locked are fixed locally and must keep the local action. Local charge
+slots are kept regardless. In winter, respect the cheap-hour charging rules.
+Return every slot exactly once, using its slot index, via submit_plan. A local engine
+simulates and only accepts changes that lower the simulated cost safely."""
 
 
 class SlotProposal(BaseModel):
@@ -200,6 +225,124 @@ def _public_payload(data: PlannerInput) -> dict[str, object]:
     }
 
 
+def _rounded(value: float, digits: int = 3) -> float:
+    value = float(value)
+    if not math.isfinite(value):
+        raise ProposalRejected("invalid household context value")
+    return round(value, digits)
+
+
+def _recent_history(day: date, limit: int = 7) -> list[dict[str, object]]:
+    try:
+        kpis = KPIRepository.get_recent(limit + 1)
+    except Exception as exc:  # history is optional context; never block planning
+        logger.info("Claude planning history unavailable (%s)", type(exc).__name__)
+        return []
+    history = []
+    for kpi in sorted(kpis, key=lambda item: item.date_key):
+        if kpi.date_key >= day.isoformat():
+            continue
+        try:
+            history.append({
+                "date": kpi.date_key,
+                "expected_consumption_kwh": _rounded(kpi.expected_daily_consumption_kwh, 2),
+                "realized_consumption_kwh": _rounded(kpi.realized_daily_consumption_kwh, 2),
+                "planned_grid_kwh": _rounded(kpi.planned_grid_kwh, 2),
+                "actual_grid_kwh": _rounded(kpi.actual_grid_kwh, 2),
+                "planned_peak_import_kwh": _rounded(kpi.planned_peak_import_kwh, 2),
+                "actual_peak_import_kwh": _rounded(kpi.actual_peak_import_kwh, 2),
+                "soc_at_peak_start": _rounded(kpi.soc_at_peak_start, 1),
+            })
+        except ProposalRejected:
+            continue
+    return history[-limit:]
+
+
+def _planning_payload(
+    planner: DayPlanner, data: PlannerInput, baseline: list[PlanAction]
+) -> dict[str, object]:
+    """Public prices/rules plus, when enabled, the household context the local engine uses."""
+    payload = _public_payload(data)
+    if not settings.claude_share_household_context:
+        return payload
+
+    inputs = data.simulation_inputs or planner.capture_simulation_inputs(data.day)
+    points = sorted(data.price_points, key=lambda point: point.timestamp)
+    # Gross consumption per slot (no PV), then PV separately, matching the simulation model.
+    consumption = planner._hourly_consumption_for_points(
+        points, inputs.expected_daily_consumption_kwh, inputs.hourly_consumption_profile,
+        [0.0] * 24, reference_day=data.day,
+    )
+    weather = data.pv_weather_factor_24h if data.pv_weather_factor_24h and len(data.pv_weather_factor_24h) == 24 else None
+
+    ordered_baseline = sorted(baseline, key=lambda action: action.start_time)
+    simulated: dict[datetime, SimulationPoint] = {}
+    try:
+        for point in planner.simulate(
+            data.day, ordered_baseline, data.start_soc, pv_weather_factor_24h=data.pv_weather_factor_24h,
+            simulation_inputs=inputs, simulation_start_time=data.simulation_start_time,
+        ):
+            simulated[point.timestamp.replace(tzinfo=None)] = point
+    except Exception as exc:
+        logger.info("Claude planning context: local projection unavailable (%s)", type(exc).__name__)
+
+    by_hour: dict[datetime, list[PlanAction]] = {}
+    for action in ordered_baseline:
+        hour = action.start_time.replace(tzinfo=None, minute=0, second=0, microsecond=0)
+        by_hour.setdefault(hour, []).append(action)
+
+    slots = payload["slots"]
+    assert isinstance(slots, list)
+    for slot, point, consumption_kwh in zip(slots, points, consumption):
+        hour = planner._local_hour(point.timestamp)
+        factor = max(0.0, float(weather[hour])) if weather else 1.0
+        slot["tariff_ore_per_kwh"] = _rounded(
+            data.tariff_ore_per_hour[hour] if data.tariff_ore_per_hour and len(data.tariff_ore_per_hour) == 24 else 0.0, 2
+        )
+        slot["expected_consumption_kwh"] = _rounded(consumption_kwh)
+        slot["expected_pv_kwh"] = _rounded(max(0.0, inputs.hourly_pv_profile_kwh[hour] * factor))
+        key = point.timestamp.replace(tzinfo=None)
+        local_actions = by_hour.get(key, [])
+        if local_actions:
+            slot["local_action"] = local_actions[0].action
+            slot["locked"] = any(_overlaps_locally_protected(data, action) or action.is_manual_override
+                                 for action in local_actions)
+        projected = [simulated[a.start_time.replace(tzinfo=None)] for a in local_actions
+                     if a.start_time.replace(tzinfo=None) in simulated]
+        if projected:
+            slot["local_projected_soc_end"] = _rounded(projected[-1].projected_soc, 1)
+            slot["local_projected_grid_kwh"] = _rounded(sum(p.projected_grid_kwh for p in projected))
+
+    payload["household"] = {
+        "start_soc_percent": _rounded(data.start_soc, 1),
+        "planning_from": (data.simulation_start_time or data.planning_start_time).isoformat()
+        if (data.simulation_start_time or data.planning_start_time) else None,
+        "expected_daily_consumption_kwh": _rounded(inputs.expected_daily_consumption_kwh),
+        "battery": {
+            "capacity_kwh": _rounded(planner.capacity_kwh, 2),
+            "min_soc_percent": _rounded(planner.min_soc, 1),
+            "max_soc_percent": _rounded(planner.max_soc, 1),
+            "max_charge_kw": _rounded(planner.max_charge_kwh, 2),
+            "max_discharge_kw": _rounded(planner.max_discharge_kwh, 2),
+            "charge_efficiency": _rounded(planner.charge_efficiency),
+            "discharge_efficiency": _rounded(planner.discharge_efficiency),
+            "degradation_ore_per_kwh": _rounded(planner.degradation_cost_ore_per_kwh, 2),
+        },
+        "economics": {
+            "vat_factor": _rounded(settings.tariff_vat_factor if settings.objective_include_vat else 1.0),
+            "feed_in_ore_per_kwh": _rounded(settings.feed_in_tariff_ore, 2),
+        },
+        "reserve": {
+            "enabled": bool(settings.reserve_soc_enabled),
+            "start_hour": int(settings.reserve_soc_start_hour_local),
+            "end_hour": int(settings.reserve_soc_end_hour_local),
+            "min_soc_percent": _rounded(settings.reserve_soc_min_percent, 1),
+        },
+        "recent_days": _recent_history(data.day),
+    }
+    return payload
+
+
 async def _request_proposal(payload: dict[str, object]) -> Proposal:
     async with httpx.AsyncClient(timeout=settings.claude_timeout_seconds) as client:
         response = await client.post(
@@ -211,11 +354,11 @@ async def _request_proposal(payload: dict[str, object]) -> Proposal:
             json={
                 "model": settings.claude_model,
                 "max_tokens": 2048,
-                "system": _SYSTEM,
+                "system": _SYSTEM_HOUSEHOLD if "household" in payload else _SYSTEM_PUBLIC,
                 "messages": [{"role": "user", "content": json.dumps(payload, allow_nan=False)}],
                 "tools": [{
                     "name": "submit_plan",
-                    "description": "Submit a complete hourly price-based battery proposal for local validation.",
+                    "description": "Submit a complete hourly battery proposal for local validation.",
                     "input_schema": Proposal.model_json_schema(),
                 }],
                 "tool_choice": {"type": "tool", "name": "submit_plan"},
@@ -478,7 +621,7 @@ async def select_plan_with_claude(
         return PlanSelection(baseline, prepare_for_comparison(baseline))
 
     try:
-        proposal = await _request_proposal(_public_payload(data))
+        proposal = await _request_proposal(_planning_payload(planner, data, baseline))
     except ProposalRejected as exc:
         logger.warning("Claude planning rejected for %s: %s; using existing planner", data.day, exc)
         _record(data, "rejected")

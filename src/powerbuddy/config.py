@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     claude_timeout_seconds: float = Field(
         default=45.0, gt=0, le=120, alias="POWERBUDDY_CLAUDE_TIMEOUT_SECONDS"
     )
+    # Send household context (consumption/PV forecast, SOC, tariffs, battery limits,
+    # local plan and recent KPI history) so Claude has a realistic planning basis.
+    claude_share_household_context: bool = Field(
+        default=True, alias="POWERBUDDY_CLAUDE_SHARE_HOUSEHOLD_CONTEXT"
+    )
 
     inverter_type: str = Field(default="fronius", alias="POWERBUDDY_INVERTER_TYPE")
     # Keep default empty to satisfy static type-checkers; must be set via env in real runs.

@@ -10,7 +10,7 @@ import pytest
 from pydantic import SecretStr
 
 from powerbuddy.config import Settings, settings
-from powerbuddy.models import PlanAction, PricePoint, SimulationPoint
+from powerbuddy.models import PlanAction, PlannerKPI, PricePoint, SimulationPoint
 from powerbuddy.services import claude_planner as ai
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.scheduler import PowerBuddyScheduler
@@ -202,13 +202,60 @@ def test_outcome_is_reconciled_after_final_postprocessing(planning, caplog):
     assert "No Claude changes survived final plan processing" in caplog.text
 
 
-def test_request_allowlist_and_valid_plan(planning, monkeypatch, caplog):
+def test_request_includes_household_context_and_valid_plan(planning, monkeypatch, caplog):
     planner, data, baseline = planning
     requests = mock_api(monkeypatch, tool_response())
+    monkeypatch.setattr(ai.KPIRepository, "get_recent", lambda limit=7: [])
     with caplog.at_level(logging.INFO):
         result = asyncio.run(ai.plan_with_claude(planner, data))
     assert [action.action for action in result] == ["auto"] * 3
     assert [action.action for action in baseline] == ["hold"] * 3
+    body = json.loads(requests[0].content)
+    payload = json.loads(body["messages"][0]["content"])
+    assert set(payload) == {"slots", "rules", "household"}
+    slot = payload["slots"][0]
+    assert {"slot", "time", "spot_ore_per_kwh", "tariff_ore_per_kwh", "expected_consumption_kwh",
+            "expected_pv_kwh", "local_action", "locked", "local_projected_soc_end"} <= set(slot)
+    assert slot["tariff_ore_per_kwh"] == 99.7
+    assert slot["local_action"] == "hold" and slot["locked"] is False
+    household = payload["household"]
+    assert household["start_soc_percent"] == 57.3
+    assert household["battery"]["capacity_kwh"] == round(planner.capacity_kwh, 2)
+    assert set(household) >= {"battery", "economics", "reserve", "recent_days", "expected_daily_consumption_kwh"}
+    assert "household" in body["system"] and "no private household data" not in body["system"]
+    assert "test-key-not-real" not in json.dumps(body) + caplog.text
+    assert requests[0].headers["x-api-key"] == "test-key-not-real"
+    assert body["tool_choice"] == {"type": "tool", "name": "submit_plan"}
+    assert "accepted after local validation" in caplog.text
+
+
+def test_recent_history_excludes_planned_day_and_survives_db_errors(monkeypatch):
+    day = date(2026, 11, 12)
+    kpis = [
+        PlannerKPI(date_key=key, planned_grid_kwh=1.0, actual_grid_kwh=2.0,
+                      planned_peak_import_kwh=0.5, actual_peak_import_kwh=0.6, plan_error_ratio=0.1,
+                      soc_at_peak_start=60.0, expected_daily_consumption_kwh=30.0,
+                      realized_daily_consumption_kwh=31.5, updated_at=datetime(2026, 11, 12))
+        for key in ("2026-11-12", "2026-11-10", "2026-11-11")
+    ]
+    monkeypatch.setattr(ai.KPIRepository, "get_recent", lambda limit=7: kpis)
+    history = ai._recent_history(day)
+    assert [entry["date"] for entry in history] == ["2026-11-10", "2026-11-11"]
+    assert history[0]["realized_consumption_kwh"] == 31.5
+
+    def broken(limit=7):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(ai.KPIRepository, "get_recent", broken)
+    assert ai._recent_history(day) == []
+
+
+def test_public_only_request_when_household_context_disabled(planning, monkeypatch, caplog):
+    planner, data, baseline = planning
+    monkeypatch.setattr(settings, "claude_share_household_context", False)
+    requests = mock_api(monkeypatch, tool_response())
+    with caplog.at_level(logging.INFO):
+        asyncio.run(ai.plan_with_claude(planner, data))
     body = json.loads(requests[0].content)
     public = json.loads(body["messages"][0]["content"])
     assert set(public) == {"slots", "rules"}
@@ -220,10 +267,7 @@ def test_request_allowlist_and_valid_plan(planning, monkeypatch, caplog):
     assert "57.3" not in json.dumps(body)
     assert "99.7" not in json.dumps(body)
     assert "0.763" not in json.dumps(body)
-    assert "test-key-not-real" not in json.dumps(body) + caplog.text
-    assert requests[0].headers["x-api-key"] == "test-key-not-real"
-    assert body["tool_choice"] == {"type": "tool", "name": "submit_plan"}
-    assert "accepted after local validation" in caplog.text
+    assert "You have no private household data" in body["system"]
 
 
 @pytest.mark.parametrize("status", [401, 429, 500])
@@ -422,7 +466,9 @@ def test_comparison_reuses_one_snapshot_for_both_plans(planning, monkeypatch):
                for _, _, snapshot, weather in simulated)
     assert data.simulation_inputs is not None
     assert data.simulation_inputs.expected_daily_consumption_kwh == 51.234
-    assert "51.234" not in requests[0].content.decode()
+    # The request context uses the same captured snapshot as the local comparison.
+    sent = json.loads(json.loads(requests[0].content)["messages"][0]["content"])
+    assert sent["household"]["expected_daily_consumption_kwh"] == 51.234
 
 
 def test_no_remaining_periods_falls_back_without_simulating(planning, monkeypatch, caplog):
@@ -624,9 +670,10 @@ def test_safe_partial_survives_full_scheduler_pipeline_and_manual_half(monkeypat
     assert {action.start_time.hour for action in stored if action.action == "charge"} == set(range(6))
     snapshots = [snapshot for _, snapshot in simulated]
     assert snapshots and snapshots[0] is not None and all(snapshot is snapshots[0] for snapshot in snapshots)
+    # simulated[0] is the raw local plan projected for the request context; comparisons follow.
     assert all(
         any(hour == 0 and minute == 30 and mode == "charge" for hour, minute, mode, _ in actions)
-        for actions, _ in simulated
+        for actions, _ in simulated[1:]
     )
     final_actions = simulated[-1][0]
     assert [entry[1:] for entry in final_actions if entry[0] == 0] == [

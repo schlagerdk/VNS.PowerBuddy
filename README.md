@@ -58,7 +58,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.21`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.22`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -290,9 +290,17 @@ Verifying the key and model does not verify available API credit or spending lim
 Never commit the key. It is masked in settings representations and excluded from
 settings serialization and `/config`.
 
-Only public spot-price timestamps/values and general seasonal charging rules are
-sent to Anthropic. Household consumption/history, telemetry, SOC, solar forecasts,
-manual overrides, location, tariffs and other environment settings stay local.
+To give Claude a realistic planning basis, each request contains, besides the
+spot prices and seasonal charging rules, the household context the local engine
+plans with: per-hour grid tariff, expected consumption and solar production (from
+the household's own history and the weather forecast), starting SOC and planning
+start time, battery capacity/limits/efficiencies/wear cost, VAT factor and feed-in
+price, the reserve window, the local plan with its projected SOC and grid use, and
+up to 7 previous days of planner KPIs (expected vs. realized consumption, planned vs.
+actual grid and peak import). Hours with manual or locked actions are flagged as
+locked without their details. Telemetry snapshots, location, inverter addresses and
+keys are never sent. Set `POWERBUDDY_CLAUDE_SHARE_HOUSEHOLD_CONTEXT=false` to send
+only public spot prices and general rules as before.
 No call is made for dummy/provisional prices. This is a constrained proposal
 integration, not an autonomous agent with server or inverter access.
 
@@ -316,8 +324,7 @@ clamp the simulated battery level. If a complete
 proposal worsens simulated cost, battery reserve or expensive-hour grid purchases,
 a local heuristic tests subsets of its changes against the same constraints. A
 partial proposal is used only if its simulated cost is more than 0.01 øre lower
-and an AI-suggested action survives processing. No extra Claude request or private
-data is needed. If no qualifying subset is found, the local baseline is used.
+and an AI-suggested action survives processing. No extra Claude request is needed. If no qualifying subset is found, the local baseline is used.
 Duplicate wall-clock price slots reaching Claude planning fall back to the existing
 planner. The current price store is keyed by wall time and retains only one
 occurrence of a repeated autumn hour.

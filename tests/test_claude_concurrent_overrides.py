@@ -122,11 +122,15 @@ def test_override_changed_while_claude_waits_is_compared_and_saved(
             action="hold", reason="old manual action", is_manual_override=True,
         ))
 
+    simulations_before_request = []
+
     async def run():
         requested = asyncio.Event()
         continue_request = asyncio.Event()
 
         async def request(payload):
+            # Earlier simulations only build the request context; comparisons happen afterwards.
+            simulations_before_request.append(len(simulated))
             requested.set()
             await continue_request.wait()
             if not request_succeeds:
@@ -195,7 +199,7 @@ def test_override_changed_while_claude_waits_is_compared_and_saved(
     ] == expected
     assert simulated[-1] == expected
     manual_segment = next(segment for segment in expected if segment[3])
-    assert all(manual_segment in actions for actions in simulated)
+    assert all(manual_segment in actions for actions in simulated[simulations_before_request[0]:])
     points = repositories.SimulationRepository.get_points(day.isoformat())
     assert [(point.timestamp, point.action) for point in points] == [
         (start, mode) for start, _, mode, _ in expected
