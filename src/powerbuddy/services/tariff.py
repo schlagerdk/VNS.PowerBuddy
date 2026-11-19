@@ -116,12 +116,17 @@ class TariffService:
 
     def total_tariff_ore_24h(self, network_tariff: list[float]) -> list[float]:
         """
-        Adds flat Energinet systemtarif + elafgift (both excl. VAT) to each
-        hourly network tariff to get the full 24h fixed-fee profile.
+        Everything paid per imported kWh on top of spot, excl. VAT: hourly network
+        tariff + Energinet + elafgift + supplier markup.
 
-        Spot price is NOT included here; add it separately in the planner.
+        This is the single price model: the planner optimises (spot + this) * VAT and
+        the dashboard shows the same number.
         """
-        flat = settings.tariff_energinet_ore + settings.tariff_elafgift_ore
+        flat = (
+            settings.tariff_energinet_ore
+            + settings.tariff_elafgift_ore
+            + max(0.0, float(settings.price_supplier_markup_ore))
+        )
         return [n + flat for n in network_tariff]
 
     # ── Private helpers ───────────────────────────────────────────────────────

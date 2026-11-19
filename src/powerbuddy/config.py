@@ -608,9 +608,10 @@ class Settings(BaseSettings):
         default=6.0,
         alias="POWERBUDDY_TARIFF_ENERGINET_ORE",
     )
-    # State electricity tax (elafgift) — flat per kWh, 2026 rate (øre, excl. VAT)
+    # State electricity tax (elafgift) — flat per kWh (øre, excl. VAT). Temporarily
+    # lowered to the EU minimum of 0.8 øre in 2026 and 2027 (otherwise ~72.7 øre).
     tariff_elafgift_ore: float = Field(
-        default=76.10,
+        default=0.8,
         alias="POWERBUDDY_TARIFF_ELAFGIFT_ORE",
     )
     # VAT factor applied on top of all components for display purposes (not optimisation)
@@ -634,9 +635,10 @@ class Settings(BaseSettings):
         alias="POWERBUDDY_ALLOW_DUMMY_PRICES",
     )
 
-    # Retail price-model calibration (excl. VAT):
-    # - supplier markup added on top of spot ("without transport/afgifter" in UI)
-    # - transport fixed component added with network tariff for "with transport/afgifter"
+    # Retail price model (excl. VAT): the supplier markup is paid per imported kWh on
+    # top of spot and is part of the price the planner optimises and the chart shows.
+    # price_transport_fixed_ore is no longer used (Energinet + elafgift are counted
+    # explicitly); it is kept so existing .env files still load.
     price_supplier_markup_ore: float = Field(
         default=12.0,
         alias="POWERBUDDY_PRICE_SUPPLIER_MARKUP_ORE",

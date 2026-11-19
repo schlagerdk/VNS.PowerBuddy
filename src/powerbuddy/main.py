@@ -501,7 +501,8 @@ def _dashboard_apply_plan_state(
         if slot_local < current_hour or slot_local >= window_end:
             continue
 
-        raw_price_ore = point.price_without_fees_ore_per_kwh
+        # Show the full price (tariffs, fees and VAT) the planner optimises.
+        raw_price_ore = point.price_with_fees_ore_per_kwh
         if raw_price_ore is None:
             raw_price_ore = point.price_ore_per_kwh
         normalized_prices[slot_local] = float(raw_price_ore)
@@ -2130,14 +2131,14 @@ async def get_tariff() -> TariffOut:
     energinet = settings.tariff_energinet_ore
     elafgift = settings.tariff_elafgift_ore
     vat = settings.tariff_vat_factor
-    flat = energinet + elafgift
+    total = tariff_service.total_tariff_ore_24h(network)
 
     hours = [
         TariffHourOut(
             hour=h,
             network_tariff_ore=round(network[h], 3),
-            total_tariff_ore_excl_vat=round(network[h] + flat, 3),
-            total_tariff_ore_incl_vat=round((network[h] + flat) * vat, 3),
+            total_tariff_ore_excl_vat=round(total[h], 3),
+            total_tariff_ore_incl_vat=round(total[h] * vat, 3),
         )
         for h in range(24)
     ]
@@ -2292,13 +2293,13 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
     network_series: list[float] = []
     total_cost_series: list[float | None] = []
     vat = settings.tariff_vat_factor
-    flat_tariff = settings.tariff_energinet_ore + settings.tariff_elafgift_ore
-    for i, ts in enumerate(timeline):
-        net = network_tariff[i] if i < len(network_tariff) else network_tariff[-1]
-        network_series.append(round(net, 3))
+    total_tariff = tariff_service.total_tariff_ore_24h(network_tariff)
+    for ts in timeline:
+        hour = ts.astimezone(ZoneInfo(settings.timezone)).hour if ts.tzinfo else ts.hour
+        network_series.append(round(network_tariff[hour], 3))
         spot = price_by_ts[ts].price_ore_per_kwh if ts in price_by_ts else None
         if spot is not None:
-            total_cost_series.append(round((spot + net + flat_tariff) * vat, 2))
+            total_cost_series.append(round((spot + total_tariff[hour]) * vat, 2))
         else:
             total_cost_series.append(None)
 
@@ -2453,10 +2454,9 @@ async def get_prices(
 
             prices = filled
 
-    network_tariff_24h = await tariff_service.get_network_tariff_24h()
+    total_tariff_24h = tariff_service.total_tariff_ore_24h(await tariff_service.get_network_tariff_24h())
     vat = float(settings.tariff_vat_factor)
     supplier_markup = max(0.0, float(settings.price_supplier_markup_ore))
-    transport_fixed = max(0.0, float(settings.price_transport_fixed_ore))
     local_tz = ZoneInfo(settings.timezone)
 
     out: list[PriceOut] = []
@@ -2467,10 +2467,10 @@ async def get_prices(
         else:
             local_hour = int(ts.hour)
 
-        network_component = float(network_tariff_24h[local_hour]) if 0 <= local_hour <= 23 else 0.0
         spot = float(p.price_ore_per_kwh)
         without_fees = (spot + supplier_markup) * vat
-        with_fees = (spot + supplier_markup + network_component + transport_fixed) * vat
+        # Same full import price the planner optimises.
+        with_fees = (spot + float(total_tariff_24h[local_hour])) * vat
 
         out.append(
             PriceOut(

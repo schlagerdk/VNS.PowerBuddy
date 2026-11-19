@@ -217,3 +217,56 @@ def test_get_prices_morning_does_not_create_dummy_for_tomorrow(monkeypatch):
     # In the morning at 09:00, no dummy prices should be created for tomorrow
     assert dummy_created_days == []
     assert all(p.timestamp.date() == today for p in result)
+
+
+def test_price_with_fees_is_the_price_the_planner_optimises(monkeypatch):
+    from powerbuddy.services.tariff import tariff_service
+
+    network = [10.0] * 24
+    network[17] = 95.0
+
+    async def fake_get_network_tariff_24h():
+        return network
+
+    monkeypatch.setattr("powerbuddy.main.tariff_service.get_network_tariff_24h", fake_get_network_tariff_24h)
+    monkeypatch.setattr("powerbuddy.main.settings.timezone", "Europe/Copenhagen")
+    monkeypatch.setattr("powerbuddy.main.settings.tariff_vat_factor", 1.25)
+    monkeypatch.setattr("powerbuddy.main.settings.tariff_energinet_ore", 6.0)
+    monkeypatch.setattr("powerbuddy.main.settings.tariff_elafgift_ore", 1.0)
+    monkeypatch.setattr("powerbuddy.main.settings.price_supplier_markup_ore", 12.0)
+    monkeypatch.setattr(
+        "powerbuddy.main.PriceRepository.get_by_day",
+        lambda day, area: [
+            PricePoint(
+                timestamp=datetime(2026, 9, 1, hour, 0), area=area, price_ore_per_kwh=100.0,
+                currency="DKK", source="energidataservice",
+            )
+            for hour in (15, 17)
+        ],
+    )
+
+    result = asyncio.run(get_prices(target_date=date(2026, 9, 1)))
+
+    planner_tariff = tariff_service.total_tariff_ore_24h(network)
+    assert [round(p.price_with_fees_ore_per_kwh, 6) for p in result] == [
+        round((100.0 + planner_tariff[15]) * 1.25, 6),
+        round((100.0 + planner_tariff[17]) * 1.25, 6),
+    ]
+    assert result[1].price_with_fees_ore_per_kwh - result[0].price_with_fees_ore_per_kwh == 85.0 * 1.25
+
+
+def test_dashboard_bars_show_the_full_price(monkeypatch):
+    monkeypatch.setattr("powerbuddy.main.datetime", FixedDashboardDateTime)
+    prices = [
+        PriceOut(
+            timestamp=datetime(2026, 9, 1, hour, 0, 0), area="DK1", price_ore_per_kwh=100.0,
+            spot_price_ore_per_kwh=100.0, price_without_fees_ore_per_kwh=140.0,
+            price_with_fees_ore_per_kwh=full, currency="DKK", source="energidataservice",
+        )
+        for hour, full in ((12, 389.0), (13, 477.0))
+    ]
+
+    rendered = _dashboard_apply_plan_state('<div class="chart-bars"></div>', [], prices)
+
+    assert "3,89" in rendered and "4,77" in rendered
+    assert "1,40" not in rendered
