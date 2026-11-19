@@ -35,7 +35,7 @@ Core capabilities:
 - Weather-based PV production forecasting (Open-Meteo cloud/radiation API).
 - Seasonal consumption anchoring with configurable monthly reference values.
 - Weekday/weekend consumption profiling.
-- Exact cost-optimal planning: dynamic programming over battery SOC minimizes the real bill (spot + tariff + VAT, feed-in, battery wear) with the same model the simulation uses. `hold` is only planned when it saves money; otherwise the battery runs `auto`.
+- Exact cost-optimal planning: dynamic programming over battery SOC minimizes the real bill (spot + tariff + VAT, feed-in, battery wear) with the same model the simulation uses. `hold` is a bet on the forecast, so it is only planned when it saves at least `POWERBUDDY_HOLD_MIN_GAIN_ORE` (default 10 øre) per held hour; otherwise the battery runs `auto`.
 - Battery efficiency and cycle degradation cost modelling.
 - Solar capture hold mode — allows PV charging in hold without grid draw.
 - Intraday guarded re-planning when consumption deviates from expectations.
@@ -57,7 +57,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.25`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.26`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 

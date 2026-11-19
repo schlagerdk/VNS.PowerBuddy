@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     claude_share_household_context: bool = Field(
         default=True, alias="POWERBUDDY_CLAUDE_SHARE_HOUSEHOLD_CONTEXT"
     )
+    # Minimum saving (øre per held hour) before the planner trades "auto" for "hold".
+    # A hold relies on the forecast being right, so near-zero gains are not worth it.
+    hold_min_gain_ore: float = Field(default=10.0, ge=0, alias="POWERBUDDY_HOLD_MIN_GAIN_ORE")
     # The local planner is cost-optimal for its forecast; a Claude proposal is only used
     # when it lowers the simulated daily cost by at least this much.
     claude_min_saving_ore: float = Field(

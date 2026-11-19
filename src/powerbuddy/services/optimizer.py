@@ -8,8 +8,9 @@ Dynamic programming over battery state of charge, using the very same step model
 
 There are no heuristic penalties. The only hard rules are physical limits, manual or
 frozen intervals (kept exactly as they are) and the configured winter charge floor.
-A ``hold`` is only chosen when it saves more than ``HOLD_MIN_GAIN_ORE`` compared with
-letting the battery run in ``auto``; on ties the planner always prefers ``auto``.
+A ``hold`` is a bet on the forecast (it buys power now on the expectation that the
+battery would otherwise run out in a pricier hour), so it is only chosen when it saves
+more than ``POWERBUDDY_HOLD_MIN_GAIN_ORE`` per held hour; ties always prefer ``auto``.
 """
 
 from __future__ import annotations
@@ -23,9 +24,6 @@ from powerbuddy.models import PlanAction, PricePoint
 from powerbuddy.services.planner import WINTER_CHEAP_CHARGE_REASON, DayPlanner, PlannerInput
 
 SOC_STEP_PERCENT = 0.25
-# A hold must beat auto by more than this per slot; filters out holds that only move
-# energy between near-identical prices.
-HOLD_MIN_GAIN_ORE = 1.0
 PUBLIC_PRICE_SOURCES = frozenset({"energidataservice", "elprisenligenu"})
 
 REASON_AUTO = "optimizer: self-consumption"
@@ -41,6 +39,10 @@ _TIE_ORDER = {"auto": 0, "charge": 1, "hold": 2}
 class _Segment:
     duration_hours: float
     fixed: PlanAction | None
+
+
+def hold_min_gain_ore() -> float:
+    return max(0.0, float(settings.hold_min_gain_ore))
 
 
 def _naive(dt: datetime) -> datetime:
@@ -200,10 +202,11 @@ def optimize_day(planner: DayPlanner, data: PlannerInput) -> list[PlanAction]:
             return ("auto", "hold")
         return ("auto", "hold", "charge")
 
+    hold_gain = hold_min_gain_ore()
     wear = planner.degradation_cost_ore_per_kwh * planner.capacity_kwh / 100.0
 
     def run_slot(t: int, soc: float, choice: str) -> tuple[float, float]:
-        cost = HOLD_MIN_GAIN_ORE if choice == "hold" else 0.0
+        cost = hold_gain if choice == "hold" else 0.0
         for segment in slots[t]:
             if segment.fixed is not None:
                 action, power = segment.fixed.action, segment.fixed.charge_power_w

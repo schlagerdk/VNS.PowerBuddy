@@ -7,7 +7,7 @@ import pytest
 
 from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint
-from powerbuddy.services.optimizer import HOLD_MIN_GAIN_ORE, carry_over_value_ore_per_kwh
+from powerbuddy.services.optimizer import carry_over_value_ore_per_kwh, hold_min_gain_ore
 from powerbuddy.services.planner import DayPlanner, PlannerInput, SimulationInputs, is_winter_charge_floor
 
 DAY = date(2026, 11, 20)
@@ -105,13 +105,16 @@ def test_plan_matches_brute_force_optimum(planner, monkeypatch, start_soc, pv):
             for point, mode in zip(data.price_points, choice)
         ]
 
+    def penalised(actions: list[PlanAction]) -> float:
+        # The optimizer's own objective: real cost plus the hold threshold per held hour.
+        return _objective(planner, data, actions) + hold_min_gain_ore() * sum(a.action == "hold" for a in actions)
+
     best = min(
-        _objective(planner, data, actions_for(choice))
+        penalised(actions_for(choice))
         for choice in itertools.product(("auto", "hold", "charge"), repeat=len(prices))
     )
-    holds = sum(1 for a in planned if a.action == "hold")
-    # Grid discretisation (0.25 % SOC) plus the deliberate hold threshold.
-    assert _objective(planner, data, planned) <= best + 2.0 + holds * HOLD_MIN_GAIN_ORE
+    # Tolerance covers the 0.25 % SOC grid.
+    assert penalised(planned) <= best + 2.0
 
 
 def test_carry_over_uses_next_day_prices_when_released(planner):
@@ -148,3 +151,12 @@ def test_full_battery_is_never_labelled_charge_outside_the_floor(planner):
     actions = planner.plan(data)
 
     assert all(a.action != "charge" or is_winter_charge_floor(a) for a in actions[5:])
+
+
+def test_marginal_hold_in_an_expensive_hour_is_not_worth_the_forecast_risk(planner):
+    # Remaining afternoon: the battery runs short, but 15:00 is only a few øre cheaper
+    # than the peak it would save energy for.
+    kr = [2.62, 2.68, 2.69, 2.72, 2.65, 2.39, 2.23, 2.06, 1.94]
+    data = PlannerInput(DAY, _points(kr, start_hour=15), start_soc=45.0, simulation_inputs=_inputs(20.0))
+
+    assert all(action.action == "auto" for action in planner.plan(data))
