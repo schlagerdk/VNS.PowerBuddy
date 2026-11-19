@@ -52,7 +52,7 @@ def test_winter_charge_floor_includes_global_and_additional_overnight_slots(monk
     assert {2, 3, 6, 7, 12, 18}.issubset(charge_hours)
 
 
-def test_winter_charge_floor_survives_sanity_and_redundant_charge_trim(monkeypatch):
+def test_winter_charge_floor_survives_sanity(monkeypatch):
     monkeypatch.setattr(settings, "winter_cheap_charge_hours", 4)
     monkeypatch.setattr(settings, "winter_additional_night_charge_hours", 2)
     monkeypatch.setattr(settings, "winter_cheap_charge_night_start_hour", 0)
@@ -100,9 +100,6 @@ def test_winter_charge_floor_survives_sanity_and_redundant_charge_trim(monkeypat
     assert required.issubset(checked_charges)
     assert 14 not in checked_charges
 
-    trimmed = planner.trim_redundant_charge_actions(day, checked, 100.0, price_points=points)
-    assert required.issubset({a.start_time.hour for a in trimmed if a.action == "charge"})
-
 
 def test_winter_floor_in_remaining_day_uses_tariff_for_each_local_hour(monkeypatch):
     monkeypatch.setattr(settings, "winter_cheap_charge_hours", 4)
@@ -124,10 +121,31 @@ def test_winter_floor_in_remaining_day_uses_tariff_for_each_local_hour(monkeypat
     monkeypatch.setattr(planner, "resolve_hourly_consumption_profile", lambda day: ([1 / 24] * 24, "test"))
     monkeypatch.setattr(planner, "resolve_hourly_pv_profile", lambda day: ([0.0] * 24, "test"))
     actions = planner.plan(PlannerInput(
-        day=day, price_points=points, start_soc=50.0,
-        planning_start_time=midnight + timedelta(hours=8), tariff_ore_per_hour=tariffs,
+        day=day, price_points=points, start_soc=50.0, tariff_ore_per_hour=tariffs,
     ))
-    assert {a.start_time.hour for a in actions if is_winter_charge_floor(a)} == {10, 11, 12, 13}
+    floor = {a.start_time.hour for a in actions if is_winter_charge_floor(a)}
+    assert {10, 11, 12, 13}.issubset(floor)
+    assert not floor & {8, 9}
+
+
+def test_winter_floor_does_not_force_evening_charging_after_the_night_window(monkeypatch):
+    day = date(2026, 11, 12)
+    midnight = datetime.combine(day, datetime.min.time())
+    prices = [200.0] * 24
+    prices[20:24] = [150.0, 140.0, 130.0, 120.0]
+    points = [
+        PricePoint(
+            timestamp=midnight + timedelta(hours=hour), area="DK2",
+            price_ore_per_kwh=prices[hour], currency="DKK", source="test",
+        )
+        for hour in range(24)
+    ]
+    planner = DayPlanner()
+    actions = planner.plan(PlannerInput(
+        day=day, price_points=points, start_soc=60.0,
+        planning_start_time=midnight + timedelta(hours=13),
+    ))
+    assert not any(is_winter_charge_floor(a) for a in actions)
 
 
 def test_winter_planner_accepts_25_price_slots_with_24_hour_tariffs(monkeypatch):
@@ -240,30 +258,3 @@ def test_summer_sanity_keeps_existing_two_charge_cap(monkeypatch):
     ])
     checked, _ = apply_planning_sanity(planner, day, actions, prices, 50.0)
     assert {a.start_time.hour for a in checked if a.action == "charge"} == {10, 11}
-
-
-def test_trim_preserves_manual_hold_in_night_and_after_charge(monkeypatch):
-    day = date(2026, 11, 12)
-    start = datetime.combine(day, datetime.min.time())
-    actions = [
-        PlanAction(
-            date_key=day.isoformat(), start_time=start, end_time=start + timedelta(hours=1),
-            action="charge", charge_power_w=1000.0, is_manual_override=False,
-        ),
-        PlanAction(
-            date_key=day.isoformat(), start_time=start + timedelta(hours=1),
-            end_time=start + timedelta(hours=2), action="hold", target_soc=42.0,
-            is_manual_override=True,
-        ),
-    ]
-    planner = DayPlanner()
-    monkeypatch.setattr(planner, "simulate", lambda day, actions, start_soc, **kwargs: [
-        SimulationPoint(
-            date_key=day.isoformat(), timestamp=action.start_time, action=action.action,
-            projected_soc=50.0, projected_grid_kwh=1.0,
-        )
-        for action in actions
-    ])
-    trimmed = planner.trim_redundant_charge_actions(day, actions, 50.0)
-    assert trimmed[1].action == "hold"
-    assert trimmed[1].target_soc == 42.0

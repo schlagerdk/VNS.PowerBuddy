@@ -25,6 +25,7 @@ def planning(monkeypatch):
     monkeypatch.setattr(settings, "planning_sanity_enabled", False)
     monkeypatch.setattr(settings, "reserve_soc_enabled", False)
     monkeypatch.setattr(settings, "planning_sanity_expensive_window_enabled", False)
+    monkeypatch.setattr(settings, "claude_min_saving_ore", 0.0)
     day = date(2026, 11, 12)
     points = [
         PricePoint(
@@ -51,7 +52,7 @@ def planning(monkeypatch):
     monkeypatch.setattr(planner, "simulate", lambda day, actions, start_soc, **kwargs: [
         SimulationPoint(
             date_key=day.isoformat(), timestamp=action.start_time, action=action.action,
-            projected_soc=50.0, projected_grid_kwh=1.0,
+            projected_soc=50.0, projected_grid_kwh=0.5 if action.action == "auto" else 1.0,
         )
         for action in actions
     ])
@@ -569,6 +570,7 @@ def test_half_hour_simulations_use_the_hourly_price(planning, monkeypatch):
 
 def test_safe_partial_survives_full_scheduler_pipeline_and_manual_half(monkeypatch):
     monkeypatch.setattr(settings, "claude_api_key", SecretStr("test-key-not-real"))
+    monkeypatch.setattr(settings, "claude_min_saving_ore", 0.0)
     monkeypatch.setattr(settings, "planning_sanity_enabled", True)
     monkeypatch.setattr(settings, "planning_sanity_autofix_enabled", True)
     monkeypatch.setattr(settings, "planning_sanity_precheap_arbitrage_enabled", False)
@@ -1208,3 +1210,25 @@ def test_failed_outcome_is_collected(planning, monkeypatch):
         return ai.summarize_outcomes(outcomes)
 
     assert asyncio.run(run_failed())["unavailable"] == 1
+
+
+@pytest.mark.parametrize(("saving_ore", "accepted"), [(0.0, False), (24.0, False), (26.0, True)])
+def test_proposal_must_save_at_least_the_minimum(planning, monkeypatch, saving_ore, accepted):
+    planner, data, baseline = planning
+    monkeypatch.setattr(settings, "claude_min_saving_ore", 25.0)
+    monkeypatch.setattr(planner, "degradation_cost_ore_per_kwh", 0.0)
+    monkeypatch.setattr(planner, "_cost_ore", lambda grid, price, tariff=0.0: grid)
+    mock_api(monkeypatch, tool_response(proposal(("auto", "hold", "hold")).model_dump()))
+    monkeypatch.setattr(planner, "simulate", lambda day, actions, start_soc, **kwargs: [
+        SimulationPoint(
+            date_key=day.isoformat(), timestamp=action.start_time, action=action.action, projected_soc=50.0,
+            projected_grid_kwh=100.0 - (saving_ore if action.action == "auto" else 0.0),
+        )
+        for action in actions
+    ])
+
+    with ai.collect_outcomes() as outcomes:
+        result = asyncio.run(ai.plan_with_claude(planner, data))
+
+    assert outcomes[data.day.isoformat()] == ("accepted" if accepted else "rejected")
+    assert (result is baseline) is not accepted

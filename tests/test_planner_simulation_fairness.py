@@ -4,9 +4,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from powerbuddy.main import _hourly_simulation_values
-from powerbuddy.config import settings
 from powerbuddy.models import PlanAction, PricePoint, SimulationPoint
-from powerbuddy.services.plan_processing import process_actions
 from powerbuddy.services.planner import DayPlanner, PlannerInput, SimulationInputs
 from powerbuddy.services.scheduler import PowerBuddyScheduler
 
@@ -259,29 +257,19 @@ def test_effective_plan_splits_actions_at_hourly_price_boundaries():
             for item in effective] == [(9, 30, 10, 0), (10, 0, 10, 30)]
 
 
-@pytest.mark.parametrize("stage", ["sanity", "trim"])
-def test_frozen_actions_survive_sanity_and_trim(stage, forecast_planner, monkeypatch):
+def test_optimizer_keeps_frozen_actions_exactly(forecast_planner):
     day = date(2030, 11, 12)
     locked_charge = action(day, 10, mode="charge")
     locked_charge.charge_power_w = 1000.0
     locked_charge.target_soc = 70.0
     locked_hold = action(day, 11, mode="hold")
-    later = action(day, 12, mode="auto")
-    actions = [locked_charge, locked_hold, later]
     prices = [
         PricePoint(
-            timestamp=item.start_time, area="DK2", price_ore_per_kwh=float(hour),
+            timestamp=datetime(2030, 11, 12, hour), area="DK2", price_ore_per_kwh=price,
             currency="DKK", source="elprisenligenu",
         )
-        for item, hour in zip(actions, (10, 20, 30))
+        for hour, price in ((10, 300.0), (11, 10.0), (12, 300.0))
     ]
-    monkeypatch.setattr(settings, "planning_sanity_enabled", stage == "sanity")
-    monkeypatch.setattr(settings, "planning_sanity_autofix_enabled", True)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_enabled", True)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_start_hour_local", 11)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_end_hour_local", 12)
-    monkeypatch.setattr(settings, "planning_sanity_min_expensive_auto_share", 1.0)
-    monkeypatch.setattr(settings, "planning_variant_search_enabled", False)
     data = PlannerInput(
         day=day, price_points=prices, start_soc=50.0,
         locally_protected_actions=[locked_charge, locked_hold],
@@ -289,47 +277,8 @@ def test_frozen_actions_survive_sanity_and_trim(stage, forecast_planner, monkeyp
         simulation_start_time=datetime.combine(day, datetime.min.time()) + timedelta(hours=10, minutes=15),
     )
 
-    processed, _, _ = process_actions(forecast_planner, data, actions, trim_redundant=stage == "trim")
+    planned = forecast_planner.plan(data)
 
-    assert (processed[0].action, processed[0].charge_power_w, processed[0].target_soc) == (
-        "charge", 1000.0, 70.0,
-    )
-    assert processed[1].action == "hold"
-
-
-def test_frozen_actions_survive_variant_search(forecast_planner, monkeypatch):
-    day = date(2030, 11, 12)
-    actions = [action(day, 10), action(day, 11), action(day, 12, mode="auto")]
-    prices = [
-        PricePoint(
-            timestamp=item.start_time, area="DK2", price_ore_per_kwh=price,
-            currency="DKK", source="elprisenligenu",
-        )
-        for item, price in zip(actions, (50.0, 10.0, 100.0))
-    ]
-    monkeypatch.setattr(settings, "planning_sanity_enabled", False)
-    monkeypatch.setattr(settings, "planning_variant_search_enabled", True)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_enabled", True)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_start_hour_local", 12)
-    monkeypatch.setattr(settings, "planning_sanity_expensive_window_end_hour_local", 13)
-    monkeypatch.setattr(settings, "planning_sanity_min_expensive_auto_share", 0.0)
-    monkeypatch.setattr(settings, "reserve_soc_min_percent", 5.0)
-    monkeypatch.setattr(settings, "must_charge_window_min_soc_percent", 5.0)
-    monkeypatch.setattr(settings, "planning_variant_search_max_precheap_auto_hours", 1)
-    monkeypatch.setattr(settings, "planning_variant_search_max_cheap_charge_hours", 0)
-    monkeypatch.setattr(forecast_planner, "simulate", lambda day, actions, start_soc, **kwargs: [
-        SimulationPoint(
-            date_key=day.isoformat(), timestamp=item.start_time, action=item.action,
-            projected_soc=start_soc, projected_grid_kwh=0.0 if item.action == "auto" else 1.0,
-        )
-        for item in actions
-    ])
-    data = PlannerInput(
-        day=day, price_points=prices, start_soc=50.0,
-        locally_protected_actions=[actions[0]],
-        simulation_inputs=SimulationInputs(24.0, tuple([1 / 24] * 24), tuple([0.0] * 24)),
-    )
-
-    processed, _, _ = process_actions(forecast_planner, data, actions, trim_redundant=False)
-
-    assert processed[0].action == "hold"
+    assert (planned[0].action, planned[0].charge_power_w, planned[0].target_soc) == ("charge", 1000.0, 70.0)
+    assert planned[1].action == "hold"
+    assert planned[2].action == "auto"

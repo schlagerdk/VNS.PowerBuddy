@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     claude_share_household_context: bool = Field(
         default=True, alias="POWERBUDDY_CLAUDE_SHARE_HOUSEHOLD_CONTEXT"
     )
+    # The local planner is cost-optimal for its forecast; a Claude proposal is only used
+    # when it lowers the simulated daily cost by at least this much.
+    claude_min_saving_ore: float = Field(
+        default=25.0, ge=0, alias="POWERBUDDY_CLAUDE_MIN_SAVING_ORE"
+    )
 
     inverter_type: str = Field(default="fronius", alias="POWERBUDDY_INVERTER_TYPE")
     # Keep default empty to satisfy static type-checkers; must be set via env in real runs.

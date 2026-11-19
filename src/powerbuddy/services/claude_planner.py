@@ -35,6 +35,10 @@ _COST_TOLERANCE_ORE = 0.01
 _CLAUDE_REASON = "Claude price proposal (locally validated)"
 
 
+def _min_saving_ore() -> float:
+    return max(_COST_TOLERANCE_ORE, float(settings.claude_min_saving_ore))
+
+
 def claude_configured() -> bool:
     return bool(settings.claude_api_key.get_secret_value().strip())
 
@@ -129,14 +133,15 @@ The payload contains per-slot spot price, grid tariff, expected household consum
 and expected solar production (both kWh, derived from the household's own history and
 a weather forecast), the battery's start SOC and limits, the local planner's plan with
 its projected SOC, and recent days' KPIs showing how good past forecasts were.
-Use this to: charge only when the price spread to later expensive hours covers losses
-and wear and the energy will actually be needed (account for expected solar); hold
-energy when it is worth more in later expensive hours than now; keep the reserve SOC
-during the reserve window; avoid ending the day with less energy than the local plan.
+The local plan is already cost-optimal for this forecast. Only deviate where you see a
+clear saving the forecast misses (for example from the recent KPI history): charge only
+when the price spread to later expensive hours covers losses and wear and the energy
+will actually be needed; hold only when the stored energy is worth clearly more in later
+hours than now. Prefer auto. Avoid ending the day with less energy than the local plan.
 Slots marked locked are fixed locally and must keep the local action. Local charge
 slots are kept regardless. In winter, respect the cheap-hour charging rules.
 Return every slot exactly once, using its slot index, via submit_plan. A local engine
-simulates and only accepts changes that lower the simulated cost safely."""
+simulates and only accepts changes that lower the simulated cost by a meaningful amount."""
 
 
 class SlotProposal(BaseModel):
@@ -558,11 +563,12 @@ def _safe_partial_candidate(
             )
         except ProposalRegression:
             continue
-        if cost <= best_cost:
+        # Only keep a slot that strictly lowers cost; neutral changes are noise.
+        if cost + _COST_TOLERANCE_ORE < best_cost:
             selected = trial_slots
             best_cost = cost
             if (
-                cost + _COST_TOLERANCE_ORE < baseline_evaluation.cost_ore
+                cost <= baseline_evaluation.cost_ore - _min_saving_ore()
                 and _has_applied_change(baseline_compared, trial_compared)
             ):
                 best_candidate = (trial, trial_compared, cost)
@@ -652,10 +658,12 @@ async def select_plan_with_claude(
         candidate_compared = prepare_for_comparison(candidate)
         baseline_evaluation = _evaluate_locally(planner, data, baseline_compared)
         try:
-            _validate_locally(
+            candidate_cost = _validate_locally(
                 planner, data, baseline_compared, candidate_compared,
                 baseline_evaluation=baseline_evaluation, log_comparison=True,
             )
+            if candidate_cost > baseline_evaluation.cost_ore - _min_saving_ore():
+                raise ProposalRegression("Claude proposal does not save enough to replace the optimal local plan")
             if not _has_applied_change(baseline_compared, candidate_compared):
                 raise ProposalRegression("Claude proposal made no surviving eligible changes")
         except ProposalRegression:

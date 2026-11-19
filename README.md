@@ -35,13 +35,12 @@ Core capabilities:
 - Weather-based PV production forecasting (Open-Meteo cloud/radiation API).
 - Seasonal consumption anchoring with configurable monthly reference values.
 - Weekday/weekend consumption profiling.
-- Multi-scenario robust planning (low/base/high PV and consumption scenarios).
+- Exact cost-optimal planning: dynamic programming over battery SOC minimizes the real bill (spot + tariff + VAT, feed-in, battery wear) with the same model the simulation uses. `hold` is only planned when it saves money; otherwise the battery runs `auto`.
 - Battery efficiency and cycle degradation cost modelling.
 - Solar capture hold mode — allows PV charging in hold without grid draw.
 - Intraday guarded re-planning when consumption deviates from expectations.
 - KPI tracking and automatic consumption tuning based on historical accuracy.
 - Accurate SOC projection for future-day planning (simulates today's remaining plan).
-- Reserve SOC protection windows (configurable hours, e.g. evening peak).
 - Stores prices, power snapshots, plans, and simulations in SQLite.
 - Supports manual plan overrides through the API.
 - Keeps existing day plans stable unless changed manually.
@@ -58,7 +57,7 @@ Core capabilities:
 
 ## Compatibility
 
-This release (`v1.0.24`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
+This release (`v1.0.25`) targets Fronius-based installations and uses Fronius local API endpoints for telemetry/control.
 
 Current status:
 
@@ -306,8 +305,9 @@ integration, not an autonomous agent with server or inverter access.
 
 The local engine provides the baseline and evaluates both alternatives with the
 same captured consumption and solar forecasts, starting SOC, tariffs and simulation
-start time. Both alternatives go through the same processing used by the relevant
-planning path, including applicable sanity checks, variant selection and trimming.
+start time. The local plan is cost-optimal for its forecast, so a Claude proposal is only used
+when it lowers the simulated daily cost by at least `POWERBUDDY_CLAUDE_MIN_SAVING_ORE`
+(default 25 øre); individual changes must each lower the cost.
 The comparison also includes the effective manual and locked actions; overrides
 changed while waiting for Claude are refreshed before local validation. The selected
 processed plan is the one saved and simulated. Locally scheduled charge slots
@@ -323,8 +323,7 @@ values are projection hints, not inverter-enforced stops, so they do not artific
 clamp the simulated battery level. If a complete
 proposal worsens simulated cost, battery reserve or expensive-hour grid purchases,
 a local heuristic tests subsets of its changes against the same constraints. A
-partial proposal is used only if its simulated cost is more than 0.01 øre lower
-and an AI-suggested action survives processing. No extra Claude request is needed. If no qualifying subset is found, the local baseline is used.
+partial proposal is used only if it reaches the same minimum saving. No extra Claude request is needed. If no qualifying subset is found, the local baseline is used.
 Duplicate wall-clock price slots reaching Claude planning fall back to the existing
 planner. The current price store is keyed by wall time and retains only one
 occurrence of a repeated autumn hour.
@@ -340,7 +339,8 @@ responses, keys or prompts; unrecognized errors retain only the HTTP status.
 
 - Base value: `POWERBUDDY_EXPECTED_DAILY_CONSUMPTION_KWH`.
 - Dynamic mode: when `POWERBUDDY_DYNAMIC_CONSUMPTION_ENABLED=true`, the planner uses a rolling average of historical daily consumption from `power_snapshots`.
-- In the non-summer season, the planner selects the four cheapest available charge slots plus up to two additional cheap slots in the overnight window (00:00-05:00 by default). Current-day replanning only considers the remaining hours. These required slots are protected from automatic sanity and trimming passes; manual overrides still take precedence, and an active charge converts to hold when the battery is full. Additional safety or reserve charge slots may still be added when SOC and consumption require them.
+- In the non-summer season, the planner selects the four cheapest available charge slots plus up to two additional cheap slots in the overnight window (00:00-05:00 by default). The floor applies when the planning horizon contains the night window, so an intraday replan is never forced to charge in the evening. Manual overrides still take precedence, and an active charge converts to hold when the battery is full. The optimizer adds further charge slots when the price spread makes them pay off.
+- Energy left in the battery at the end of the day is valued at the cheapest released import price for the next day (or the plan's own cheapest hour), discounted by round-trip efficiency, so energy is only carried over midnight when that clearly pays.
 - Lookback window: `POWERBUDDY_DYNAMIC_CONSUMPTION_LOOKBACK_DAYS`.
 - Minimum sample requirement per day: `POWERBUDDY_DYNAMIC_CONSUMPTION_MIN_SAMPLES_PER_DAY`.
 - Seasonal anchoring: when `POWERBUDDY_SEASONAL_ANCHOR_ENABLED=true`, the dynamic value is blended with a monthly reference (`POWERBUDDY_SEASONAL_ANCHOR_MONTHLY_DAILY_KWH_JSON`).

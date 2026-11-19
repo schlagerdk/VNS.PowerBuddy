@@ -12,7 +12,8 @@ from powerbuddy.database import SessionLocal
 from powerbuddy.models import PlanAction, PlannerKPI, PowerSnapshot
 from powerbuddy.repositories import KPIRepository, PlanRepository, PowerRepository, PriceRepository, SimulationRepository
 from powerbuddy.services.inverter import get_inverter_client
-from powerbuddy.services.plan_processing import PreparedPlan, process_actions
+from powerbuddy.services.optimizer import released_next_day_prices
+from powerbuddy.services.plan_processing import PreparedPlan
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.claude_planner import claude_action_signatures, reconcile_outcome, select_plan_with_claude
 from powerbuddy.services.pricing import PricePoint, get_price_provider
@@ -181,13 +182,6 @@ class PowerBuddyScheduler:
         manual_overrides: list[PlanAction] = []
         frozen_actions: list[PlanAction] = []
 
-        def _overlaps(a: PlanAction, b: PlanAction) -> bool:
-            a_start = a.start_time.replace(tzinfo=None) if a.start_time.tzinfo else a.start_time
-            a_end = a.end_time.replace(tzinfo=None) if a.end_time.tzinfo else a.end_time
-            b_start = b.start_time.replace(tzinfo=None) if b.start_time.tzinfo else b.start_time
-            b_end = b.end_time.replace(tzinfo=None) if b.end_time.tzinfo else b.end_time
-            return a_start < b_end and a_end > b_start
-
         data = PlannerInput(
             day=day,
             price_points=prices,
@@ -197,6 +191,7 @@ class PowerBuddyScheduler:
             pv_weather_factor_24h=weather_factors,
             locally_protected_actions=manual_overrides + frozen_actions,
             simulation_start_time=now_local if planning_start is not None else None,
+            next_day_price_points=released_next_day_prices(day),
         )
         prepared: dict[int, tuple[list[PlanAction], PreparedPlan]] = {}
         context_refreshed = False
@@ -226,14 +221,7 @@ class PowerBuddyScheduler:
             cached = prepared.get(id(raw_actions))
             if cached is not None and cached[0] is raw_actions:
                 return cached[1]
-            partially_overridden = [
-                action for action in raw_actions
-                if any(_overlaps(action, manual_action) for manual_action in manual_overrides)
-            ]
             effective = self._dedupe_effective_actions(manual_overrides + frozen_actions + raw_actions)
-            effective, sanity_report, variant_report = process_actions(
-                self.planner, data, effective, trim_redundant=True, protected_actions=partially_overridden,
-            )
             actions_to_store = [action for action in effective if not action.is_manual_override]
             final_actions = self._dedupe_effective_actions(manual_overrides + actions_to_store)
             simulation_actions = final_actions
@@ -245,8 +233,6 @@ class PowerBuddyScheduler:
             result = PreparedPlan(
                 actions_to_store=actions_to_store,
                 simulation_actions=simulation_actions,
-                sanity_report=sanity_report,
-                variant_report=variant_report,
             )
             prepared[id(raw_actions)] = (raw_actions, result)
             return result
@@ -256,15 +242,6 @@ class PowerBuddyScheduler:
         )
         selected = prepare(selection.planned_actions)
         claude_actions = claude_action_signatures(selection.planned_actions)
-        if bool(selected.sanity_report.get("auto_fix_applied")):
-            logger.info("Planning sanity autofix adjusted %s action(s) for %s", selected.sanity_report.get("changes"), day)
-        if selected.variant_report.get("best_changes"):
-            logger.info(
-                "Variant search selected cheaper plan for %s (changes=%s, score=%s)",
-                day,
-                selected.variant_report.get("best_changes"),
-                selected.variant_report.get("best_score_ore"),
-            )
         PlanRepository.replace_plan(day_key, selected.actions_to_store)
         final_actions = self._dedupe_effective_actions(PlanRepository.get_plan(day_key))
         reconcile_outcome(day, claude_actions, final_actions)

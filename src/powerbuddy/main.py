@@ -51,7 +51,8 @@ from powerbuddy.schemas import (
 )
 from powerbuddy.services import half_hour
 from powerbuddy.services.inverter import get_inverter_client
-from powerbuddy.services.plan_processing import PreparedPlan, process_actions
+from powerbuddy.services.optimizer import released_next_day_prices
+from powerbuddy.services.plan_processing import PreparedPlan
 from powerbuddy.services.planner import DayPlanner, PlannerInput
 from powerbuddy.services.claude_planner import (
     claude_action_signatures,
@@ -1885,6 +1886,7 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
         pv_weather_factor_24h=weather_factors,
         locally_protected_actions=manual_overrides,
         simulation_start_time=now_local if day == now_local.date() else None,
+        next_day_price_points=released_next_day_prices(day),
     )
     prepared: dict[int, tuple[list[PlanAction], PreparedPlan]] = {}
     context_refreshed = False
@@ -1952,9 +1954,6 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
         effective = PowerBuddyScheduler._dedupe_effective_actions(
             manual_overrides + generated + partially_overridden
         )
-        effective, sanity_report, variant_report = process_actions(
-            planner, data, effective, trim_redundant=False, protected_actions=partially_overridden,
-        )
         actions_to_store = [action for action in effective if not action.is_manual_override]
         final_actions = PowerBuddyScheduler._dedupe_effective_actions(manual_overrides + actions_to_store)
         simulation_actions = final_actions
@@ -1964,8 +1963,6 @@ async def _materialize_day_plan_if_missing(day: date) -> None:
         result = PreparedPlan(
             actions_to_store=actions_to_store,
             simulation_actions=simulation_actions,
-            sanity_report=sanity_report,
-            variant_report=variant_report,
         )
         prepared[id(raw_actions)] = (raw_actions, result)
         return result
@@ -2215,6 +2212,7 @@ async def planning_chart_data(target_date: date | None = None) -> PlanningChartO
             tariff_ore_per_hour=tariff_24h_bootstrap,
             pv_weather_factor_24h=weather_factors,
             simulation_start_time=now_local if used_day == now_local.date() else None,
+            next_day_price_points=released_next_day_prices(used_day),
         )
 
         manual_overrides: list[PlanAction] = []

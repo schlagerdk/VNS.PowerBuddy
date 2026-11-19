@@ -228,8 +228,7 @@ def test_manual_fetch_replans_only_fetched_days_when_requested(monkeypatch):
     assert planned == [fetched_day]
 
 
-@pytest.mark.parametrize("survives", [True, False])
-def test_scheduler_protects_manual_and_locked_actions_and_reconciles_outcome(monkeypatch, survives):
+def test_scheduler_protects_manual_and_locked_actions_and_reconciles_outcome(monkeypatch):
     now = datetime.now(ZoneInfo(settings.timezone)).replace(
         minute=0, second=0, microsecond=0, tzinfo=None,
     )
@@ -270,12 +269,6 @@ def test_scheduler_protects_manual_and_locked_actions_and_reconciles_outcome(mon
     monkeypatch.setattr(settings, "planning_sanity_enabled", False)
     monkeypatch.setattr(settings, "planning_variant_search_enabled", False)
     monkeypatch.setattr(planner, "simulate", lambda *args, **kwargs: [])
-    monkeypatch.setattr(
-        planner, "trim_redundant_charge_actions",
-        lambda day, actions, start_soc, **kwargs: [
-            action for action in actions if survives or action.reason != proposed.reason
-        ],
-    )
     monkeypatch.setattr("powerbuddy.services.scheduler.select_plan_with_claude", fake_plan)
     monkeypatch.setattr("powerbuddy.services.scheduler.tariff_service.get_network_tariff_24h", no_tariff)
     monkeypatch.setattr("powerbuddy.services.scheduler.tariff_service.total_tariff_ore_24h", lambda tariffs: tariffs)
@@ -300,7 +293,7 @@ def test_scheduler_protects_manual_and_locked_actions_and_reconciles_outcome(mon
     assert {(action.start_time, action.is_manual_override) for action in protected} == {
         (locked.start_time, False), (manual.start_time, True),
     }
-    assert outcomes[day.isoformat()] == ("accepted" if survives else "rejected")
+    assert outcomes[day.isoformat()] == "accepted"
 
 
 def test_lazy_day_plan_protects_existing_manual_overrides(monkeypatch):

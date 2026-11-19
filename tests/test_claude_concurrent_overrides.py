@@ -63,10 +63,6 @@ def test_override_changed_while_claude_waits_is_compared_and_saved(
         lambda self, day: SimulationInputs(24.0, tuple([1 / 24] * 24), tuple([0.0] * 24)),
     )
     monkeypatch.setattr(DayPlanner, "resolve_expected_daily_consumption", lambda self, day: (24.0, "test"))
-    monkeypatch.setattr(
-        DayPlanner, "trim_redundant_charge_actions",
-        lambda self, day, actions, start_soc, **kwargs: actions,
-    )
     monkeypatch.setattr(DayPlanner, "plan", lambda self, data: [
         PlanAction(
             date_key=day.isoformat(), start_time=point.timestamp,
